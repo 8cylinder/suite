@@ -1,0 +1,32 @@
+
+* Development apps
+** cm
+Generate a git commit message from the working-tree diff using a pluggable AI provider.
+remote: =git@github.com:8cylinder/commit.git=
+** tether
+Run AI coding agents in a Docker container confined to a project directory.
+remote: =git@github.com:8cylinder/tether.git=
+** prism
+TUI for viewing and navigating files found via CLI search tools (find, rg, grep).
+remote: =git@github.com:8cylinder/prism.git=
+** dotfig
+Manage individual config files with a git-friendly tree of symlinks.
+remote: =git@github.com:8cylinder/dotfig.git=
+** cyborg
+Python wrapper around BorgBackup that automates backups via a simple CLI.
+remote: =git@github.com:8cylinder/cyborg.git=
+** prompt
+Generate a customizable bash PS1 prompt and teleport between registered projects.
+remote: =git@github.com:8cylinder/prompt-teleport.git=
+** sink
+Web-development project management tool for syncing files/databases and deploying.
+remote: =git@github.com:8cylinder/sink.git=
+** kompressor
+Compress, convert, resize, trim, and slugify images.
+remote: =git@github.com:8cylinder/kompressor.git=
+** do-until
+Run a command until a specific time, with a pretty countdown progress bar.
+remote: =git@github.com:8cylinder/do-until.git=
+** chopper
+Split a single file into separate files for writing server-side CMS partials.
+remote: =git@github.com:8cylinder/chopper.git=
