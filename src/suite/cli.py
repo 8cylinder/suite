@@ -8,10 +8,16 @@ from pathlib import Path
 from . import __version__
 from .config import Config, absolute_path, display_path
 from .errors import SuiteError
-from .git import check_app
+from .git import check_app, get_remote_url
 from .models import App, CheckResult
 
 DEFAULT_ORG_FILE = "suite.org"
+
+CHECK_HEADERS = ("APP", "TO COMMIT", "TO PULL", "DETAIL")
+# Rows are printed as each app finishes, so status columns cannot be sized from
+# the full table. Size them for the longest static label and let unusually long
+# values push the detail column right.
+STATUS_COLUMN_WIDTH = max(len(CHECK_HEADERS[1]), len("no upstream"))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,10 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     add = subparsers.add_parser("add", help="add an application")
     add.add_argument("name", help="application name")
-    add.add_argument(
-        "-d", "--dir", dest="local_dir", type=Path, metavar="PATH", help="local checkout"
-    )
-    add.add_argument("-r", "--remote", help="git remote URL")
+    add.add_argument("path", type=Path, help="local checkout (must be an existing directory)")
+    add.add_argument("-r", "--remote", help="override the checkout's git remote URL")
     add.add_argument("--description", help="short description")
 
     remove = subparsers.add_parser("remove", help="remove an application")
@@ -98,26 +102,33 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
         apps = config.apps
 
     if not apps:
-        print("No apps configured. Add one with `suite add NAME --dir PATH`.")
+        print("No apps configured. Add one with `suite add NAME PATH`.")
         return 0
 
-    results = [check_app(app, fetch=not args.no_fetch) for app in apps]
-    _print_check_results(results)
+    widths = _check_column_widths(apps)
+    print(_format_row(CHECK_HEADERS, widths), flush=True)
 
-    for result in results:
+    results: list[CheckResult] = []
+    for app in apps:
+        result = check_app(app, fetch=not args.no_fetch)
+        results.append(result)
+        print(_format_row(_check_row(result), widths), flush=True)
         if result.fetch_error:
             print(
                 f"suite: warning: {result.app.name}: {result.fetch_error}",
                 file=sys.stderr,
             )
 
+    _print_check_summary(results)
     return 1 if any(result.has_problem for result in results) else 0
 
 
-def _print_check_results(results: list[CheckResult]) -> None:
-    rows = [_check_row(result) for result in results]
-    _print_table(("APP", "TO COMMIT", "TO PULL", "DETAIL"), rows)
+def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int]:
+    name_width = max(len(CHECK_HEADERS[0]), *(len(app.name) for app in apps))
+    return (name_width, STATUS_COLUMN_WIDTH, STATUS_COLUMN_WIDTH, 0)
 
+
+def _print_check_summary(results: list[CheckResult]) -> None:
     commit_count = sum(1 for result in results if result.state == "ok" and result.changes > 0)
     pull_count = sum(1 for result in results if result.state == "ok" and result.behind > 0)
     problem_count = sum(1 for result in results if result.has_problem)
@@ -160,7 +171,7 @@ def _check_row(result: CheckResult) -> tuple[str, str, str, str]:
 
 def _cmd_list(config: Config) -> int:
     if not config.apps:
-        print("No apps configured. Add one with `suite add NAME --dir PATH`.")
+        print("No apps configured. Add one with `suite add NAME PATH`.")
     else:
         rows = [(app.name, display_path(app.local_dir), app.remote or "-") for app in config.apps]
         _print_table(("NAME", "LOCAL DIR", "REMOTE"), rows)
@@ -174,26 +185,24 @@ def _cmd_add(config: Config, args: argparse.Namespace) -> int:
     if not name:
         raise SuiteError("application name cannot be empty")
 
-    local_dir = (
-        absolute_path(args.local_dir)
-        if args.local_dir is not None
-        else absolute_path(config.apps_root / name)
-    )
+    local_dir = absolute_path(args.path)
+    if not local_dir.is_dir():
+        raise SuiteError(f"path is not an existing directory: {display_path(local_dir)}")
+
+    remote = (args.remote or "").strip() or get_remote_url(local_dir)
+    if remote is None:
+        raise SuiteError(f"no git remote found for {display_path(local_dir)}")
+
     app = App(
         name=name,
         local_dir=local_dir,
-        remote=(args.remote or "").strip() or None,
+        remote=remote,
         description=(args.description or "").strip() or None,
     )
     config.add_app(app)
     config.save()
 
     print(f"Added {app.name} -> {display_path(app.local_dir)}")
-    if not app.local_dir.is_dir():
-        print(
-            f"suite: warning: {display_path(app.local_dir)} does not exist yet",
-            file=sys.stderr,
-        )
     return 0
 
 
@@ -240,8 +249,12 @@ def _cmd_config(config: Config, args: argparse.Namespace) -> int:
 def _print_table(headers: tuple[str, ...], rows: Sequence[tuple[str, ...]]) -> None:
     widths = [max(len(row[index]) for row in (headers, *rows)) for index in range(len(headers))]
     for row in (headers, *rows):
-        line = "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True))
-        print(line.rstrip())
+        print(_format_row(row, widths))
+
+
+def _format_row(row: Sequence[str], widths: Sequence[int]) -> str:
+    line = "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True))
+    return line.rstrip()
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from suite.git import check_app
+from suite.git import check_app, get_remote_url
 from suite.models import App
 
 
@@ -97,6 +97,21 @@ def test_commits_to_pull_require_fetch(repositories: tuple[Path, Path], tmp_path
     local = check_app(App(name="demo", local_dir=clone), fetch=False)
     assert local.behind == 1
     assert local.ahead == 1
+
+
+def test_remote_url_prefers_origin(repositories: tuple[Path, Path]) -> None:
+    origin, clone = repositories
+    git(clone, "remote", "add", "other", "git@example.com:other.git")
+
+    assert get_remote_url(clone) == str(origin)
+
+
+def test_remote_url_without_remotes(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+
+    assert get_remote_url(repo) is None
 
 
 def test_missing_directory(tmp_path: Path) -> None:

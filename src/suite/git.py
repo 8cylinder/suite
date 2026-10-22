@@ -81,6 +81,22 @@ def _check_app(app: App, *, fetch: bool) -> CheckResult:
     )
 
 
+def get_remote_url(path: Path) -> str | None:
+    """Return the checkout's git remote URL, preferring ``origin``."""
+    remotes = _git(path, "remote")
+    if remotes.returncode != 0:
+        return None
+    names = remotes.stdout.split()
+    if not names:
+        return None
+
+    name = "origin" if "origin" in names else names[0]
+    remote = _git(path, "remote", "get-url", name)
+    if remote.returncode != 0:
+        return None
+    return remote.stdout.strip() or None
+
+
 def _git(path: Path, *args: str, timeout: int = GIT_TIMEOUT) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(path), *args],
