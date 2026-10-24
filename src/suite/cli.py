@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.text import Text
 
 from . import __version__
-from .completions import install_bash_completion
+from .completions import has_bash_completion, install_bash_completion
 from .config import Config, absolute_path, display_path
 from .errors import SuiteError
 from .git import check_app, get_remote_url
@@ -21,12 +21,13 @@ from .prompt_projects import add_projects, load_projects
 DEFAULT_ORG_FILE = "suite.org"
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
-CHECK_HEADERS = ("APP", "PRJ", "TO COMMIT", "TO PUSH", "TO PULL", "DETAIL")
+CHECK_HEADERS = ("APP", "PRJ", "CMP", "TO COMMIT", "TO PUSH", "TO PULL", "DETAIL")
 # Rows are printed as each app finishes, so status columns cannot be sized from
 # the full table. Size them for the longest static label and let unusually long
 # values push the detail column right.
 PROJECT_COLUMN_WIDTH = max(len(CHECK_HEADERS[1]), len("x"))
-STATUS_COLUMN_WIDTH = max(len(CHECK_HEADERS[2]), len("no upstream"))
+COMPLETION_COLUMN_WIDTH = max(len(CHECK_HEADERS[2]), len("x"))
+STATUS_COLUMN_WIDTH = max(len(CHECK_HEADERS[3]), len("no upstream"))
 
 
 @click.group(context_settings=CONTEXT_SETTINGS, invoke_without_command=True)
@@ -196,8 +197,13 @@ def _cmd_check(
         result = check_app(app, fetch=not no_fetch)
         results.append(result)
         listed = app.name in projects
+        has_completion = has_bash_completion(app.name)
         console.print(
-            _format_check_row(_check_row(result, listed), widths, _check_styles(result, listed)),
+            _format_check_row(
+                _check_row(result, listed, has_completion),
+                widths,
+                _check_styles(result, listed, has_completion),
+            ),
             soft_wrap=True,
         )
         if result.fetch_error:
@@ -210,11 +216,12 @@ def _cmd_check(
     return 1 if any(result.has_problem for result in results) else 0
 
 
-def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int, int, int]:
+def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int, int, int, int]:
     name_width = max(len(CHECK_HEADERS[0]), *(len(app.name) for app in apps))
     return (
         name_width,
         PROJECT_COLUMN_WIDTH,
+        COMPLETION_COLUMN_WIDTH,
         STATUS_COLUMN_WIDTH,
         STATUS_COLUMN_WIDTH,
         STATUS_COLUMN_WIDTH,
@@ -242,16 +249,43 @@ def _print_check_summary(results: list[CheckResult]) -> None:
     print(f"{_plural(len(results), 'app')}: {summary}.")
 
 
-def _check_row(result: CheckResult, listed: bool) -> tuple[str, str, str, str, str, str]:
+def _check_row(
+    result: CheckResult, listed: bool, has_completion: bool
+) -> tuple[str, str, str, str, str, str, str]:
     name = result.app.name
     project = "✓" if listed else "x"
+    completion = "✓" if has_completion else "x"
     if result.state == "missing":
-        return (name, project, "-", "-", "-", f"missing: {display_path(result.app.local_dir)}")
+        return (
+            name,
+            project,
+            completion,
+            "-",
+            "-",
+            "-",
+            f"missing: {display_path(result.app.local_dir)}",
+        )
     if result.state == "not-git":
         message = result.message or "not a git repository"
-        return (name, project, "-", "-", "-", f"{message}: {display_path(result.app.local_dir)}")
+        return (
+            name,
+            project,
+            completion,
+            "-",
+            "-",
+            "-",
+            f"{message}: {display_path(result.app.local_dir)}",
+        )
     if result.state == "error":
-        return (name, project, "-", "-", "-", f"error: {result.message or 'unknown error'}")
+        return (
+            name,
+            project,
+            completion,
+            "-",
+            "-",
+            "-",
+            f"error: {result.message or 'unknown error'}",
+        )
 
     changes = "clean" if result.changes == 0 else _plural(result.changes, "change")
     if result.upstream is None:
@@ -262,13 +296,16 @@ def _check_row(result: CheckResult, listed: bool) -> tuple[str, str, str, str, s
         pull = "up to date" if result.behind == 0 else _plural(result.behind, "commit")
 
     detail = result.upstream or result.branch or "detached HEAD"
-    return (name, project, changes, push, pull, detail)
+    return (name, project, completion, changes, push, pull, detail)
 
 
-def _check_styles(result: CheckResult, listed: bool) -> tuple[str, str, str, str, str, str]:
+def _check_styles(
+    result: CheckResult, listed: bool, has_completion: bool
+) -> tuple[str, str, str, str, str, str, str]:
     project = "green" if listed else "red"
+    completion = "green" if has_completion else "red"
     if result.state != "ok":
-        return ("bold red", project, "dim", "dim", "dim", "red")
+        return ("bold red", project, completion, "dim", "dim", "dim", "red")
 
     changes = "green" if result.changes == 0 else "yellow"
     if result.upstream is None:
@@ -277,7 +314,7 @@ def _check_styles(result: CheckResult, listed: bool) -> tuple[str, str, str, str
     else:
         push = "green" if result.ahead == 0 else "yellow"
         pull = "green" if result.behind == 0 else "yellow"
-    return ("bold", project, changes, push, pull, "dim")
+    return ("bold", project, completion, changes, push, pull, "dim")
 
 
 def _format_check_row(row: Sequence[str], widths: Sequence[int], styles: Sequence[str]) -> Text:

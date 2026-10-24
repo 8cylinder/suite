@@ -13,6 +13,11 @@ def completion_path(prog: str = "suite") -> Path:
     return base / "bash-completion" / "completions" / prog
 
 
+def has_bash_completion(prog: str = "suite") -> bool:
+    """Return True when ``prog``'s bash completion script is installed."""
+    return completion_path(prog).is_file()
+
+
 def install_bash_completion(prog: str = "suite") -> Path:
     """Write the bash completion script for ``prog`` and return its path."""
     path = completion_path(prog)

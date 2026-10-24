@@ -308,6 +308,47 @@ def test_check_shows_prompt_project_status(
     assert projects_file.read_text(encoding="utf-8") == "one\t/tmp/one\t#111111\n"
 
 
+def test_check_shows_completion_status(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    script = data_home / "bash-completion" / "completions" / "one"
+    script.parent.mkdir(parents=True)
+    script.write_text("script\n", encoding="utf-8")
+
+    for name in ("one", "two"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    output = capsys.readouterr().out
+    assert "CMP" in output
+    assert "one  x    ✓" in output
+    assert "two  x    x" in output
+
+
 def test_check_colors_the_status_columns(
     config_file: Path,
     tmp_path: Path,

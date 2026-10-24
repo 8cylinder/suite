@@ -92,7 +92,7 @@ install` first if you normally use `uv run suite`.
 
 | Command | Description |
 | --- | --- |
-| `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, and prompt project registration. |
+| `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, installed completions, and prompt project registration. |
 | `suite` | List configured applications and their local directories (same as `suite list`). |
 | `suite list` | List configured applications and their local directories. |
 | `suite add NAME PATH [--remote URL] [--description TEXT]` | Add an application whose checkout already exists at `PATH`. |
@@ -168,22 +168,30 @@ For every application, `suite check`:
 3. Counts uncommitted, staged, and untracked files as **changes to commit**.
 4. Compares `HEAD` with its upstream branch to count **commits to pull** and
    **commits to push**.
-5. Checks whether the application is registered in `~/.prompt-projects`.
+5. Checks whether the app has a bash completion script installed.
+6. Checks whether the application is registered in `~/.prompt-projects`.
 
 The **PRJ** column shows `✓` when the application is registered by name and `x`
 when it is missing. Pass `--update-dot-project` to append missing applications
 to `~/.prompt-projects` before the table is printed.
 
+The **CMP** column shows `✓` when the application's completion script is
+installed at `~/.local/share/bash-completion/completions/APP` (or
+`$XDG_DATA_HOME/bash-completion/completions/APP` when `XDG_DATA_HOME` is set),
+and `x` when it is missing. Install completions with `APP --completions`. A
+missing script is informational: it does not affect `check`'s exit code.
+
 The table is colorized with [Rich](https://github.com/Textualize/rich): green for
 clean or up-to-date values, yellow for changes or commits to pull/push, red for
-unregistered projects and application problems, and dim for neutral details.
-Colors are disabled automatically when output is not a terminal.
+unregistered projects, missing completions, and application problems, and dim
+for neutral details. Colors are disabled automatically when output is not a
+terminal.
 
 ```text
-APP     PRJ  TO COMMIT    TO PUSH      TO PULL      DETAIL
-cm      x    2 changes    1 commit     3 commits    origin/main
-tether  ✓    clean        up to date   up to date    origin/main
-prism   ✓    -            -            -             missing: ~/dev/prism
+APP     PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL
+cm      x    ✓    2 changes    1 commit     3 commits    origin/main
+tether  ✓    x    clean        up to date   up to date    origin/main
+prism   ✓    x    -            -            -             missing: ~/dev/prism
 
 3 apps: 1 with changes to commit, 1 with commits to pull,
 1 with commits to push, 1 with problems.
