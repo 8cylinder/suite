@@ -3,6 +3,8 @@
 `suite` keeps a local database of your applications and checks each one for
 uncommitted changes and commits waiting to be pulled.
 
+Repository: <https://github.com/8cylinder/suite>
+
 The database is a YAML file seeded from [`suite.org`](./suite.org) on first run.
 Each entry stores the application name, local checkout, remote, and description.
 
@@ -10,20 +12,32 @@ Each entry stores the application name, local checkout, remote, and description.
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)
+- make
 - git
 
 ## Install
 
+Clone the repository and build the environment:
+
 ```sh
-uv sync
+git clone https://github.com/8cylinder/suite.git
+cd suite
+make sync
+```
+
+Run it from the checkout:
+
+```sh
 uv run suite check
 ```
 
 To make `suite` available as a standalone command:
 
 ```sh
-uv tool install .
+make install
 ```
+
+`make install` runs `uv tool install --editable --force .`.
 
 ## First run
 
@@ -59,21 +73,87 @@ apps:
     remote: git@github.com:8cylinder/tether.git
 ```
 
+## Global options
+
+| Option | Description |
+| --- | --- |
+| `-h`, `--help` | Show help for `suite` or a subcommand. |
+| `--version` | Print `suite`'s version. |
+| `--completions` | Install the bash completion script and exit. |
+
+`suite --completions` writes the script to
+`~/.local/share/bash-completion/completions/suite` (or
+`$XDG_DATA_HOME/bash-completion/completions/suite` when `XDG_DATA_HOME` is
+set), prints the path, and prints the command to source it in the current
+terminal. The generated script invokes `suite` from `PATH`, so run `make
+install` first if you normally use `uv run suite`.
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `suite check [APP ...] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, and prompt project registration. |
+| `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, and prompt project registration. |
 | `suite list` | List configured applications and their local directories. |
-| `suite add NAME PATH [--remote URL]` | Add an application whose checkout already exists at `PATH`. |
+| `suite add NAME PATH [--remote URL] [--description TEXT]` | Add an application whose checkout already exists at `PATH`. |
 | `suite remove NAME` | Remove an application from the database. |
 | `suite sync [FILE]` | Add new applications from `suite.org` and refresh their metadata. |
 | `suite config [--show]` | Print the config path, optionally with the file contents. |
 
-`suite add` requires `PATH` to point at an existing directory. It saves the
-checkout's git remote (preferring `origin`) to the config; use `--remote` to
-override the detected URL. If the checkout has no remote, `suite add` fails.
-To add an application from `suite.org`, use `suite sync` instead.
+### `check`
+
+```text
+suite check [APP ...] [--no-fetch] [--update-dot-project]
+```
+
+- `APP ...`: check only these applications. Unknown names are an error.
+- `--no-fetch`: use cached remote state instead of running `git fetch`.
+- `--update-dot-project`: add missing applications to `~/.prompt-projects`
+  before printing the table.
+
+### `list`
+
+```text
+suite list
+```
+
+Prints the configured application name, local directory, and remote.
+
+### `add`
+
+```text
+suite add NAME PATH [-r/--remote URL] [--description TEXT]
+```
+
+`PATH` must point at an existing directory. `add` saves the checkout's git
+remote (preferring `origin`) to the config; use `--remote` to override the
+detected URL. If the checkout has no remote, `suite add` fails. To add an
+application from `suite.org`, use `suite sync` instead.
+
+### `remove`
+
+```text
+suite remove NAME
+```
+
+Removes an application from the database. It does not delete the checkout.
+
+### `sync`
+
+```text
+suite sync [FILE]
+```
+
+Reads the given org file (default: `./suite.org`), adds applications that are
+not configured yet, and refreshes remote and description metadata for existing
+applications. Existing `local_dir` values are preserved.
+
+### `config`
+
+```text
+suite config [--show]
+```
+
+Prints the config file path. With `--show`, also prints the YAML contents.
 
 ### What `check` does
 
@@ -105,9 +185,13 @@ prism   ✓    -            -            -             missing: ~/dev/prism
 1 with commits to push, 1 with problems.
 ```
 
-`check` exits with `0` when every app was inspected successfully, and `1` when
-an app is missing, is not a git repository, or cannot be inspected. Uncommitted
-changes and commits to pull or push do not affect the exit code.
+### Exit codes
+
+- `0`: success. `check` also exits `0` when every app was inspected
+  successfully, even if there are uncommitted changes or commits to pull/push.
+- `1`: `check` found an app that is missing, is not a git repository, or cannot
+  be inspected. Ctrl-C also exits `1` without a traceback.
+- `2`: a configuration, usage, or command error.
 
 If a fetch fails, `suite` shows a warning and still reports the state it can
 read from the cached remote-tracking branch.
@@ -115,8 +199,10 @@ read from the cached remote-tracking branch.
 ## Development
 
 ```sh
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
-uv run pytest
+make sync    # install dependencies
+make fmt     # format with ruff
+make lint    # lint and autofix with ruff
+make type    # type-check with ty
+make test    # run pytest
+make check   # run format check, lint, type check, and tests
 ```

@@ -1,3 +1,8 @@
 """suite - keep track of the git status of all your applications."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("suite-cli")
+except PackageNotFoundError:
+    __version__ = "0.0.0"

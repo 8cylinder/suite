@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-import argparse
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import click
+from click.shell_completion import shell_complete
 from rich.console import Console
 from rich.text import Text
 
 from . import __version__
+from .completions import install_bash_completion
 from .config import Config, absolute_path, display_path
 from .errors import SuiteError
 from .git import check_app, get_remote_url
@@ -16,6 +19,7 @@ from .models import App, CheckResult
 from .prompt_projects import add_projects, load_projects
 
 DEFAULT_ORG_FILE = "suite.org"
+CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 CHECK_HEADERS = ("APP", "PRJ", "TO COMMIT", "TO PUSH", "TO PULL", "DETAIL")
 # Rows are printed as each app finishes, so status columns cannot be sized from
@@ -25,83 +29,141 @@ PROJECT_COLUMN_WIDTH = max(len(CHECK_HEADERS[1]), len("x"))
 STATUS_COLUMN_WIDTH = max(len(CHECK_HEADERS[2]), len("no upstream"))
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="suite",
-        description="Track the git status of every application in your suite.",
+@click.group(context_settings=CONTEXT_SETTINGS, invoke_without_command=True)
+@click.version_option(__version__, prog_name="suite", message="suite %(version)s")
+@click.option("--completions", is_flag=True, help="install the bash completion script and exit")
+@click.pass_context
+def cli(ctx: click.Context, completions: bool) -> None:
+    """Track the git status of every application in your suite."""
+    if completions:
+        path = install_bash_completion()
+        click.echo(f"Completion script: {display_path(path)}")
+        click.echo(f"Source it now: source {display_path(path)}")
+        ctx.exit(0)
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+        ctx.exit(0)
+
+
+@cli.command(context_settings=CONTEXT_SETTINGS, help="show changes to commit and commits to pull")
+@click.argument("app", nargs=-1, help="only check these applications")
+@click.option(
+    "--no-fetch",
+    is_flag=True,
+    help="use cached remote state instead of running git fetch",
+)
+@click.option(
+    "--update-dot-project",
+    is_flag=True,
+    help="add missing applications to ~/.prompt-projects",
+)
+@click.pass_context
+def check(
+    ctx: click.Context,
+    app: tuple[str, ...],
+    no_fetch: bool,
+    update_dot_project: bool,
+) -> None:
+    config = _load_config()
+    ctx.exit(
+        _cmd_check(config, list(app), no_fetch=no_fetch, update_dot_project=update_dot_project)
     )
-    parser.add_argument("--version", action="version", version=f"suite {__version__}")
-    subparsers = parser.add_subparsers(dest="command", metavar="command")
 
-    check = subparsers.add_parser("check", help="show changes to commit and commits to pull")
-    check.add_argument("apps", nargs="*", metavar="APP", help="only check these applications")
-    check.add_argument(
-        "--no-fetch",
-        action="store_true",
-        help="use cached remote state instead of running git fetch",
-    )
-    check.add_argument(
-        "--update-dot-project",
-        action="store_true",
-        help="add missing applications to ~/.prompt-projects",
-    )
 
-    subparsers.add_parser("list", help="list configured applications")
+@cli.command("list", context_settings=CONTEXT_SETTINGS, help="list configured applications")
+@click.pass_context
+def list_apps(ctx: click.Context) -> None:
+    ctx.exit(_cmd_list(_load_config()))
 
-    add = subparsers.add_parser("add", help="add an application")
-    add.add_argument("name", help="application name")
-    add.add_argument("path", type=Path, help="local checkout (must be an existing directory)")
-    add.add_argument("-r", "--remote", help="override the checkout's git remote URL")
-    add.add_argument("--description", help="short description")
 
-    remove = subparsers.add_parser("remove", help="remove an application")
-    remove.add_argument("name", help="application name")
+@cli.command(context_settings=CONTEXT_SETTINGS, help="add an application")
+@click.argument("name", help="application name")
+@click.argument(
+    "path",
+    type=click.Path(path_type=Path),
+    help="local checkout (must be an existing directory)",
+)
+@click.option("-r", "--remote", help="override the checkout's git remote URL")
+@click.option("--description", help="short description")
+@click.pass_context
+def add(
+    ctx: click.Context,
+    name: str,
+    path: Path,
+    remote: str | None,
+    description: str | None,
+) -> None:
+    ctx.exit(_cmd_add(_load_config(), name, path, remote, description))
 
-    sync = subparsers.add_parser(
-        "sync", help="add applications from an org file (default: ./suite.org)"
-    )
-    sync.add_argument("file", nargs="?", default=DEFAULT_ORG_FILE, metavar="FILE")
 
-    config = subparsers.add_parser("config", help="show the config file location")
-    config.add_argument("--show", action="store_true", help="also print the config file")
+@cli.command(context_settings=CONTEXT_SETTINGS, help="remove an application")
+@click.argument("name", help="application name")
+@click.pass_context
+def remove(ctx: click.Context, name: str) -> None:
+    ctx.exit(_cmd_remove(_load_config(), name))
 
-    return parser
+
+@cli.command(
+    context_settings=CONTEXT_SETTINGS,
+    help="add applications from an org file (default: ./suite.org)",
+)
+@click.argument(
+    "file",
+    required=False,
+    default=Path(DEFAULT_ORG_FILE),
+    type=click.Path(path_type=Path),
+    metavar="FILE",
+    help="org file to read",
+)
+@click.pass_context
+def sync(ctx: click.Context, file: Path) -> None:
+    ctx.exit(_cmd_sync(_load_config(), file))
+
+
+@cli.command(context_settings=CONTEXT_SETTINGS, help="show the config file location")
+@click.option("--show", is_flag=True, help="also print the config file")
+@click.pass_context
+def config(ctx: click.Context, show: bool) -> None:
+    ctx.exit(_cmd_config(_load_config(), show))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.command is None:
-        parser.print_help()
-        return 0
-
+    """Run the CLI, returning an exit code instead of raising."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    complete_var = "_SUITE_COMPLETE"
+    instruction = os.environ.get(complete_var)
+    if instruction is not None:
+        return shell_complete(cli, {}, "suite", complete_var, instruction)
     try:
-        config = Config.load()
-        if config.created:
-            print(f"Created config: {display_path(config.path)}", file=sys.stderr)
-
-        if args.command == "check":
-            return _cmd_check(config, args)
-        if args.command == "list":
-            return _cmd_list(config)
-        if args.command == "add":
-            return _cmd_add(config, args)
-        if args.command == "remove":
-            return _cmd_remove(config, args)
-        if args.command == "sync":
-            return _cmd_sync(config, args)
-        if args.command == "config":
-            return _cmd_config(config, args)
+        with cli.make_context("suite", args) as ctx:
+            cli.invoke(ctx)
+        return 0
+    except click.exceptions.Exit as exc:
+        return exc.exit_code
+    except click.ClickException as exc:
+        exc.show()
+        return exc.exit_code
     except SuiteError as exc:
-        print(f"suite: error: {exc}", file=sys.stderr)
+        click.echo(f"suite: error: {exc}", err=True)
         return 2
+    except (click.Abort, KeyboardInterrupt):
+        return 1
 
-    parser.error(f"unknown command: {args.command}")
-    return 2
+
+def _load_config() -> Config:
+    config = Config.load()
+    if config.created:
+        click.echo(f"Created config: {display_path(config.path)}", err=True)
+    return config
 
 
-def _cmd_check(config: Config, args: argparse.Namespace) -> int:
-    names: list[str] = args.apps
+def _cmd_check(
+    config: Config,
+    names: list[str],
+    *,
+    no_fetch: bool = False,
+    update_dot_project: bool = False,
+) -> int:
     if names:
         known = {app.name for app in config.apps}
         unknown = [name for name in names if name not in known]
@@ -117,7 +179,7 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
 
     projects = set(load_projects())
     missing = [app for app in apps if app.name not in projects]
-    if args.update_dot_project and missing:
+    if update_dot_project and missing:
         added = add_projects(missing)
         projects.update(app.name for app in added)
         print(f"Added {_plural(len(added), 'project')} to ~/.prompt-projects")
@@ -131,7 +193,7 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
 
     results: list[CheckResult] = []
     for app in apps:
-        result = check_app(app, fetch=not args.no_fetch)
+        result = check_app(app, fetch=not no_fetch)
         results.append(result)
         listed = app.name in projects
         console.print(
@@ -239,16 +301,22 @@ def _cmd_list(config: Config) -> int:
     return 0
 
 
-def _cmd_add(config: Config, args: argparse.Namespace) -> int:
-    name = args.name.strip()
+def _cmd_add(
+    config: Config,
+    name: str,
+    path: Path,
+    remote: str | None,
+    description: str | None,
+) -> int:
+    name = name.strip()
     if not name:
         raise SuiteError("application name cannot be empty")
 
-    local_dir = absolute_path(args.path)
+    local_dir = absolute_path(path)
     if not local_dir.is_dir():
         raise SuiteError(f"path is not an existing directory: {display_path(local_dir)}")
 
-    remote = (args.remote or "").strip() or get_remote_url(local_dir)
+    remote = (remote or "").strip() or get_remote_url(local_dir)
     if remote is None:
         raise SuiteError(f"no git remote found for {display_path(local_dir)}")
 
@@ -256,7 +324,7 @@ def _cmd_add(config: Config, args: argparse.Namespace) -> int:
         name=name,
         local_dir=local_dir,
         remote=remote,
-        description=(args.description or "").strip() or None,
+        description=(description or "").strip() or None,
     )
     config.add_app(app)
     config.save()
@@ -265,15 +333,15 @@ def _cmd_add(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_remove(config: Config, args: argparse.Namespace) -> int:
-    app = config.remove_app(args.name.strip())
+def _cmd_remove(config: Config, name: str) -> int:
+    app = config.remove_app(name.strip())
     config.save()
     print(f"Removed {app.name} ({display_path(app.local_dir)})")
     return 0
 
 
-def _cmd_sync(config: Config, args: argparse.Namespace) -> int:
-    org_file = absolute_path(Path(args.file))
+def _cmd_sync(config: Config, file: Path) -> int:
+    org_file = absolute_path(file)
     if not org_file.is_file():
         raise SuiteError(f"org file not found: {org_file}")
 
@@ -291,9 +359,9 @@ def _cmd_sync(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_config(config: Config, args: argparse.Namespace) -> int:
+def _cmd_config(config: Config, show: bool) -> int:
     print(display_path(config.path))
-    if args.show:
+    if show:
         try:
             text = config.path.read_text(encoding="utf-8")
         except OSError as exc:

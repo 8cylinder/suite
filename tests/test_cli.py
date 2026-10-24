@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -78,10 +79,8 @@ def test_add_duplicate_is_an_error(
 def test_add_requires_an_existing_directory(
     config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    with pytest.raises(SystemExit) as exc_info:
-        main(["add", "cm"])
-    assert exc_info.value.code == 2
-    assert "path" in capsys.readouterr().err
+    assert main(["add", "cm"]) == 2
+    assert "path" in capsys.readouterr().err.lower()
 
     assert main(["add", "cm", str(tmp_path / "missing")]) == 2
     assert "not an existing directory" in capsys.readouterr().err
@@ -373,3 +372,117 @@ def test_config_show(config_file: Path, capsys: pytest.CaptureFixture[str]) -> N
     output = capsys.readouterr().out
     assert "apps_root:" in output
     assert "apps: []" in output
+
+
+def test_short_help_flag(config_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["-h"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Usage: suite" in output
+    assert "--completions" in output
+    assert not config_file.exists()
+
+
+def test_subcommand_short_help_flag(config_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["check", "-h"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Usage: suite check" in output
+    assert not config_file.exists()
+
+
+def test_version_matches_pyproject(capsys: pytest.CaptureFixture[str]) -> None:
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    expected = f"suite {pyproject['project']['version']}"
+
+    assert main(["--version"]) == 0
+    assert capsys.readouterr().out.strip() == expected
+
+
+def test_completions_installs_a_script(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+
+    assert main(["--completions"]) == 0
+
+    script_path = data_home / "bash-completion" / "completions" / "suite"
+    assert script_path.is_file()
+    script = script_path.read_text(encoding="utf-8")
+    assert "_SUITE_COMPLETE=bash_complete" in script
+    assert "complete -o nosort -F _suite_completion suite" in script
+
+    output = capsys.readouterr().out
+    assert f"Completion script: {script_path}" in output
+    assert f"Source it now: source {script_path}" in output
+    assert not config_file.exists()
+
+
+def test_completions_reports_write_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    blocker = tmp_path / "blocked"
+    blocker.write_text("", encoding="utf-8")
+    monkeypatch.setenv("XDG_DATA_HOME", str(blocker))
+
+    assert main(["--completions"]) == 2
+    assert "could not write completion script" in capsys.readouterr().err
+
+
+def test_bash_completion_protocol(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("_SUITE_COMPLETE", "bash_complete")
+    monkeypatch.setenv("COMP_WORDS", "suite ch")
+    monkeypatch.setenv("COMP_CWORD", "1")
+
+    assert main([]) == 0
+    assert "plain,check" in capsys.readouterr().out
+
+
+def test_completions_overwrites_an_existing_script(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    script_path = data_home / "bash-completion" / "completions" / "suite"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("old script\n", encoding="utf-8")
+
+    assert main(["--completions"]) == 0
+
+    script = script_path.read_text(encoding="utf-8")
+    assert "old script" not in script
+    assert "complete -o nosort" in script
+
+
+def test_keyboard_interrupt_is_a_clean_exit(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+    capsys.readouterr()
+
+    def interrupted(app: App, *, fetch: bool = True) -> CheckResult:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "check_app", interrupted)
+
+    assert main(["check", "--no-fetch"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "Traceback" not in captured.out
