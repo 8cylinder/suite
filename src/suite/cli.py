@@ -10,14 +10,16 @@ from .config import Config, absolute_path, display_path
 from .errors import SuiteError
 from .git import check_app, get_remote_url
 from .models import App, CheckResult
+from .prompt_projects import add_projects, load_projects
 
 DEFAULT_ORG_FILE = "suite.org"
 
-CHECK_HEADERS = ("APP", "TO COMMIT", "TO PULL", "DETAIL")
+CHECK_HEADERS = ("APP", "PRJ", "TO COMMIT", "TO PULL", "DETAIL")
 # Rows are printed as each app finishes, so status columns cannot be sized from
 # the full table. Size them for the longest static label and let unusually long
 # values push the detail column right.
-STATUS_COLUMN_WIDTH = max(len(CHECK_HEADERS[1]), len("no upstream"))
+PROJECT_COLUMN_WIDTH = max(len(CHECK_HEADERS[1]), len("x"))
+STATUS_COLUMN_WIDTH = max(len(CHECK_HEADERS[2]), len("no upstream"))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-fetch",
         action="store_true",
         help="use cached remote state instead of running git fetch",
+    )
+    check.add_argument(
+        "--update-dot-project",
+        action="store_true",
+        help="add missing applications to ~/.prompt-projects",
     )
 
     subparsers.add_parser("list", help="list configured applications")
@@ -105,6 +112,13 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
         print("No apps configured. Add one with `suite add NAME PATH`.")
         return 0
 
+    projects = set(load_projects())
+    missing = [app for app in apps if app.name not in projects]
+    if args.update_dot_project and missing:
+        added = add_projects(missing)
+        projects.update(app.name for app in added)
+        print(f"Added {_plural(len(added), 'project')} to ~/.prompt-projects")
+
     widths = _check_column_widths(apps)
     print(_format_row(CHECK_HEADERS, widths), flush=True)
 
@@ -112,7 +126,7 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
     for app in apps:
         result = check_app(app, fetch=not args.no_fetch)
         results.append(result)
-        print(_format_row(_check_row(result), widths), flush=True)
+        print(_format_row(_check_row(result, app.name in projects), widths), flush=True)
         if result.fetch_error:
             print(
                 f"suite: warning: {result.app.name}: {result.fetch_error}",
@@ -123,9 +137,9 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
     return 1 if any(result.has_problem for result in results) else 0
 
 
-def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int]:
+def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int, int]:
     name_width = max(len(CHECK_HEADERS[0]), *(len(app.name) for app in apps))
-    return (name_width, STATUS_COLUMN_WIDTH, STATUS_COLUMN_WIDTH, 0)
+    return (name_width, PROJECT_COLUMN_WIDTH, STATUS_COLUMN_WIDTH, STATUS_COLUMN_WIDTH, 0)
 
 
 def _print_check_summary(results: list[CheckResult]) -> None:
@@ -145,15 +159,16 @@ def _print_check_summary(results: list[CheckResult]) -> None:
     print(f"{_plural(len(results), 'app')}: {summary}.")
 
 
-def _check_row(result: CheckResult) -> tuple[str, str, str, str]:
+def _check_row(result: CheckResult, listed: bool) -> tuple[str, str, str, str, str]:
     name = result.app.name
+    project = "✓" if listed else "x"
     if result.state == "missing":
-        return (name, "-", "-", f"missing: {display_path(result.app.local_dir)}")
+        return (name, project, "-", "-", f"missing: {display_path(result.app.local_dir)}")
     if result.state == "not-git":
         message = result.message or "not a git repository"
-        return (name, "-", "-", f"{message}: {display_path(result.app.local_dir)}")
+        return (name, project, "-", "-", f"{message}: {display_path(result.app.local_dir)}")
     if result.state == "error":
-        return (name, "-", "-", f"error: {result.message or 'unknown error'}")
+        return (name, project, "-", "-", f"error: {result.message or 'unknown error'}")
 
     changes = "clean" if result.changes == 0 else _plural(result.changes, "change")
     if result.upstream is None:
@@ -166,7 +181,7 @@ def _check_row(result: CheckResult) -> tuple[str, str, str, str]:
     detail = result.upstream or result.branch or "detached HEAD"
     if result.ahead:
         detail = f"{detail} ({result.ahead} ahead)"
-    return (name, changes, pull, detail)
+    return (name, project, changes, pull, detail)
 
 
 def _cmd_list(config: Config) -> int:

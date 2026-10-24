@@ -63,7 +63,7 @@ apps:
 
 | Command | Description |
 | --- | --- |
-| `suite check [APP ...]` | Scan applications for uncommitted changes and commits to pull. |
+| `suite check [APP ...] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, and prompt project registration. |
 | `suite list` | List configured applications and their local directories. |
 | `suite add NAME PATH [--remote URL]` | Add an application whose checkout already exists at `PATH`. |
 | `suite remove NAME` | Remove an application from the database. |
@@ -83,12 +83,17 @@ For every application, `suite check`:
 2. Runs `git fetch --all` so remote state is current (disable with `--no-fetch`).
 3. Counts uncommitted, staged, and untracked files as **changes to commit**.
 4. Compares `HEAD` with its upstream branch to count **commits to pull**.
+5. Checks whether the application is registered in `~/.prompt-projects`.
+
+The **PRJ** column shows `✓` when the application is registered by name and `x`
+when it is missing. Pass `--update-dot-project` to append missing applications
+to `~/.prompt-projects` before the table is printed.
 
 ```text
-APP     TO COMMIT    TO PULL      DETAIL
-cm      2 changes    3 commits    origin/main (1 ahead)
-tether  clean        up to date   origin/main
-prism   -            -            missing: ~/dev/prism
+APP     PRJ  TO COMMIT    TO PULL      DETAIL
+cm      x    2 changes    3 commits    origin/main (1 ahead)
+tether  ✓    clean        up to date   origin/main
+prism   ✓    -            -            missing: ~/dev/prism
 
 3 apps: 1 with changes to commit, 1 with commits to pull, 1 with problems.
 ```

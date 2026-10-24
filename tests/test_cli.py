@@ -189,6 +189,92 @@ def test_check_unknown_app_is_an_error(
     assert "unknown app" in capsys.readouterr().err
 
 
+def test_check_shows_prompt_project_status(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    projects_file = home / ".prompt-projects"
+    projects_file.write_text("one\t/tmp/one\t#111111\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    for name in ("one", "two"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    output = capsys.readouterr().out
+    assert "PRJ" in output
+    assert "one  ✓" in output
+    assert "two  x" in output
+    assert projects_file.read_text(encoding="utf-8") == "one\t/tmp/one\t#111111\n"
+
+
+def test_check_update_dot_project_adds_missing_projects(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    projects_file = home / ".prompt-projects"
+    projects_file.write_text("one\t/tmp/one\t#111111\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    for name in ("one", "two"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch", "--update-dot-project"]) == 0
+
+    captured = capsys.readouterr()
+    assert "Added 1 project to ~/.prompt-projects" in captured.out
+    assert "one  ✓" in captured.out
+    assert "two  ✓" in captured.out
+    lines = projects_file.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "one\t/tmp/one\t#111111"
+    assert lines[1].startswith(f"two\t{tmp_path / 'two'}\t#")
+
+
 def test_sync_from_org_file(
     config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
