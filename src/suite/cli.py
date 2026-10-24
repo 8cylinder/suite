@@ -5,6 +5,9 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from rich.console import Console
+from rich.text import Text
+
 from . import __version__
 from .config import Config, absolute_path, display_path
 from .errors import SuiteError
@@ -14,7 +17,7 @@ from .prompt_projects import add_projects, load_projects
 
 DEFAULT_ORG_FILE = "suite.org"
 
-CHECK_HEADERS = ("APP", "PRJ", "TO COMMIT", "TO PULL", "DETAIL")
+CHECK_HEADERS = ("APP", "PRJ", "TO COMMIT", "TO PUSH", "TO PULL", "DETAIL")
 # Rows are printed as each app finishes, so status columns cannot be sized from
 # the full table. Size them for the longest static label and let unusually long
 # values push the detail column right.
@@ -119,14 +122,22 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
         projects.update(app.name for app in added)
         print(f"Added {_plural(len(added), 'project')} to ~/.prompt-projects")
 
+    console = Console()
     widths = _check_column_widths(apps)
-    print(_format_row(CHECK_HEADERS, widths), flush=True)
+    console.print(
+        _format_check_row(CHECK_HEADERS, widths, ("bold",) * len(CHECK_HEADERS)),
+        soft_wrap=True,
+    )
 
     results: list[CheckResult] = []
     for app in apps:
         result = check_app(app, fetch=not args.no_fetch)
         results.append(result)
-        print(_format_row(_check_row(result, app.name in projects), widths), flush=True)
+        listed = app.name in projects
+        console.print(
+            _format_check_row(_check_row(result, listed), widths, _check_styles(result, listed)),
+            soft_wrap=True,
+        )
         if result.fetch_error:
             print(
                 f"suite: warning: {result.app.name}: {result.fetch_error}",
@@ -137,14 +148,22 @@ def _cmd_check(config: Config, args: argparse.Namespace) -> int:
     return 1 if any(result.has_problem for result in results) else 0
 
 
-def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int, int]:
+def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int, int, int]:
     name_width = max(len(CHECK_HEADERS[0]), *(len(app.name) for app in apps))
-    return (name_width, PROJECT_COLUMN_WIDTH, STATUS_COLUMN_WIDTH, STATUS_COLUMN_WIDTH, 0)
+    return (
+        name_width,
+        PROJECT_COLUMN_WIDTH,
+        STATUS_COLUMN_WIDTH,
+        STATUS_COLUMN_WIDTH,
+        STATUS_COLUMN_WIDTH,
+        0,
+    )
 
 
 def _print_check_summary(results: list[CheckResult]) -> None:
     commit_count = sum(1 for result in results if result.state == "ok" and result.changes > 0)
     pull_count = sum(1 for result in results if result.state == "ok" and result.behind > 0)
+    push_count = sum(1 for result in results if result.state == "ok" and result.ahead > 0)
     problem_count = sum(1 for result in results if result.has_problem)
 
     parts: list[str] = []
@@ -152,6 +171,8 @@ def _print_check_summary(results: list[CheckResult]) -> None:
         parts.append(f"{commit_count} with changes to commit")
     if pull_count:
         parts.append(f"{pull_count} with commits to pull")
+    if push_count:
+        parts.append(f"{push_count} with commits to push")
     if problem_count:
         parts.append(f"{problem_count} with problems")
     summary = ", ".join(parts) if parts else "nothing to do"
@@ -159,29 +180,52 @@ def _print_check_summary(results: list[CheckResult]) -> None:
     print(f"{_plural(len(results), 'app')}: {summary}.")
 
 
-def _check_row(result: CheckResult, listed: bool) -> tuple[str, str, str, str, str]:
+def _check_row(result: CheckResult, listed: bool) -> tuple[str, str, str, str, str, str]:
     name = result.app.name
     project = "✓" if listed else "x"
     if result.state == "missing":
-        return (name, project, "-", "-", f"missing: {display_path(result.app.local_dir)}")
+        return (name, project, "-", "-", "-", f"missing: {display_path(result.app.local_dir)}")
     if result.state == "not-git":
         message = result.message or "not a git repository"
-        return (name, project, "-", "-", f"{message}: {display_path(result.app.local_dir)}")
+        return (name, project, "-", "-", "-", f"{message}: {display_path(result.app.local_dir)}")
     if result.state == "error":
-        return (name, project, "-", "-", f"error: {result.message or 'unknown error'}")
+        return (name, project, "-", "-", "-", f"error: {result.message or 'unknown error'}")
 
     changes = "clean" if result.changes == 0 else _plural(result.changes, "change")
     if result.upstream is None:
+        push = "-"
         pull = "no upstream"
-    elif result.behind == 0:
-        pull = "up to date"
     else:
-        pull = _plural(result.behind, "commit")
+        push = "up to date" if result.ahead == 0 else _plural(result.ahead, "commit")
+        pull = "up to date" if result.behind == 0 else _plural(result.behind, "commit")
 
     detail = result.upstream or result.branch or "detached HEAD"
-    if result.ahead:
-        detail = f"{detail} ({result.ahead} ahead)"
-    return (name, project, changes, pull, detail)
+    return (name, project, changes, push, pull, detail)
+
+
+def _check_styles(result: CheckResult, listed: bool) -> tuple[str, str, str, str, str, str]:
+    project = "green" if listed else "red"
+    if result.state != "ok":
+        return ("bold red", project, "dim", "dim", "dim", "red")
+
+    changes = "green" if result.changes == 0 else "yellow"
+    if result.upstream is None:
+        push = "dim"
+        pull = "yellow"
+    else:
+        push = "green" if result.ahead == 0 else "yellow"
+        pull = "green" if result.behind == 0 else "yellow"
+    return ("bold", project, changes, push, pull, "dim")
+
+
+def _format_check_row(row: Sequence[str], widths: Sequence[int], styles: Sequence[str]) -> Text:
+    text = Text()
+    for index, (cell, width, style) in enumerate(zip(row, widths, styles, strict=True)):
+        if index:
+            text.append("  ")
+        text.append(cell, style=style)
+        text.append(" " * (width - len(cell)))
+    return text
 
 
 def _cmd_list(config: Config) -> int:

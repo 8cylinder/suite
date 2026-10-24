@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from rich.console import Console
 
 from suite import cli
 from suite.cli import main
@@ -229,6 +230,72 @@ def test_check_shows_prompt_project_status(
     assert "one  ✓" in output
     assert "two  x" in output
     assert projects_file.read_text(encoding="utf-8") == "one\t/tmp/one\t#111111\n"
+
+
+def test_check_colors_the_status_columns(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".prompt-projects").write_text("one\t/tmp/one\t#111111\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(
+            app=app,
+            changes=1,
+            behind=2,
+            upstream="origin/main",
+            branch="main",
+        )
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    monkeypatch.setattr(
+        cli, "Console", lambda: Console(force_terminal=True, color_system="standard")
+    )
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    output = capsys.readouterr().out
+    assert "\x1b[32m✓" in output
+    assert "\x1b[33m1 change" in output
+    assert "\x1b[33m2 commits" in output
+
+
+def test_check_reports_commits_to_push(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(
+            app=app,
+            ahead=2,
+            upstream="origin/main",
+            branch="main",
+        )
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    output = capsys.readouterr().out
+    assert "TO PUSH" in output
+    assert "2 commits" in output
+    assert "1 with commits to push" in output
+    assert "origin/main" in output
+    assert "(2 ahead)" not in output
 
 
 def test_check_update_dot_project_adds_missing_projects(

@@ -82,25 +82,32 @@ For every application, `suite check`:
 1. Verifies the local directory exists and is a git working tree.
 2. Runs `git fetch --all` so remote state is current (disable with `--no-fetch`).
 3. Counts uncommitted, staged, and untracked files as **changes to commit**.
-4. Compares `HEAD` with its upstream branch to count **commits to pull**.
+4. Compares `HEAD` with its upstream branch to count **commits to pull** and
+   **commits to push**.
 5. Checks whether the application is registered in `~/.prompt-projects`.
 
 The **PRJ** column shows `✓` when the application is registered by name and `x`
 when it is missing. Pass `--update-dot-project` to append missing applications
 to `~/.prompt-projects` before the table is printed.
 
-```text
-APP     PRJ  TO COMMIT    TO PULL      DETAIL
-cm      x    2 changes    3 commits    origin/main (1 ahead)
-tether  ✓    clean        up to date   origin/main
-prism   ✓    -            -            missing: ~/dev/prism
+The table is colorized with [Rich](https://github.com/Textualize/rich): green for
+clean or up-to-date values, yellow for changes or commits to pull/push, red for
+unregistered projects and application problems, and dim for neutral details.
+Colors are disabled automatically when output is not a terminal.
 
-3 apps: 1 with changes to commit, 1 with commits to pull, 1 with problems.
+```text
+APP     PRJ  TO COMMIT    TO PUSH      TO PULL      DETAIL
+cm      x    2 changes    1 commit     3 commits    origin/main
+tether  ✓    clean        up to date   up to date    origin/main
+prism   ✓    -            -            -             missing: ~/dev/prism
+
+3 apps: 1 with changes to commit, 1 with commits to pull,
+1 with commits to push, 1 with problems.
 ```
 
 `check` exits with `0` when every app was inspected successfully, and `1` when
 an app is missing, is not a git repository, or cannot be inspected. Uncommitted
-changes and commits to pull do not affect the exit code.
+changes and commits to pull or push do not affect the exit code.
 
 If a fetch fails, `suite` shows a warning and still reports the state it can
 read from the cached remote-tracking branch.
