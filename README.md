@@ -93,6 +93,7 @@ install` first if you normally use `uv run suite`.
 | Command | Description |
 | --- | --- |
 | `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, and prompt project registration. |
+| `suite` | List configured applications and their local directories (same as `suite list`). |
 | `suite list` | List configured applications and their local directories. |
 | `suite add NAME PATH [--remote URL] [--description TEXT]` | Add an application whose checkout already exists at `PATH`. |
 | `suite remove NAME` | Remove an application from the database. |
@@ -116,7 +117,8 @@ suite check [APP ...] [--no-fetch] [--update-dot-project]
 suite list
 ```
 
-Prints the configured application name, local directory, and remote.
+Prints the configured application name, local directory, and remote. Running
+`suite` without a command does the same.
 
 ### `add`
 

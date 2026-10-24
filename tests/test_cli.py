@@ -34,6 +34,23 @@ def test_first_run_creates_config(config_file: Path, capsys: pytest.CaptureFixtu
     assert "Config:" in captured.out
 
 
+def test_plain_invocation_lists_apps(
+    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    local_dir = tmp_path / "cm"
+    local_dir.mkdir()
+    assert main(["add", "cm", str(local_dir), "--remote", "git@example.com:cm.git"]) == 0
+    capsys.readouterr()
+
+    assert main([]) == 0
+
+    output = capsys.readouterr().out
+    assert "NAME" in output
+    assert "cm" in output
+    assert str(local_dir) in output
+    assert "Usage: suite" not in output
+
+
 def test_add_list_remove(
     config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

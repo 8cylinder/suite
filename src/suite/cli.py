@@ -41,8 +41,7 @@ def cli(ctx: click.Context, completions: bool) -> None:
         click.echo(f"Source it now: source {display_path(path)}")
         ctx.exit(0)
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
-        ctx.exit(0)
+        ctx.exit(_cmd_list(_load_config()))
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS, help="show changes to commit and commits to pull")
