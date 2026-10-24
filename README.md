@@ -111,14 +111,16 @@ suite check [APP ...] [--no-fetch] [--update-dot-project]
 - `--update-dot-project`: add missing applications to `~/.prompt-projects`
   before printing the table.
 
+Applications are checked and printed in alphabetical order by name.
+
 ### `list`
 
 ```text
 suite list
 ```
 
-Prints the configured application name, local directory, and remote. Running
-`suite` without a command does the same.
+Prints the configured application name, local directory, and remote in
+alphabetical order by name. Running `suite` without a command does the same.
 
 ### `add`
 

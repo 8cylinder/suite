@@ -165,6 +165,66 @@ def test_check_reports_missing_app(
     assert "1 with problems" in captured.out
 
 
+def test_list_sorts_apps_by_name(
+    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for name in ("zeta", "alpha", "mu"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+    capsys.readouterr()
+
+    assert main(["list"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    names = [line.split()[0] for line in lines[1:] if line and not line.startswith("Config:")]
+    assert names == ["alpha", "mu", "zeta"]
+
+
+def test_check_sorts_apps_by_name(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("zeta", "alpha", "mu"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+    capsys.readouterr()
+
+    checked: list[str] = []
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        checked.append(app.name)
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+
+    assert main(["check", "--no-fetch"]) == 0
+    assert checked == ["alpha", "mu", "zeta"]
+
+
 def test_check_prints_each_app_as_it_is_checked(
     config_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

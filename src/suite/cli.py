@@ -171,6 +171,7 @@ def _cmd_check(
         apps = [app for app in config.apps if app.name in names]
     else:
         apps = config.apps
+    apps = sorted(apps, key=_app_sort_key)
 
     if not apps:
         print("No apps configured. Add one with `suite add NAME PATH`.")
@@ -289,11 +290,18 @@ def _format_check_row(row: Sequence[str], widths: Sequence[int], styles: Sequenc
     return text
 
 
+def _app_sort_key(app: App) -> str:
+    return app.name.casefold()
+
+
 def _cmd_list(config: Config) -> int:
     if not config.apps:
         print("No apps configured. Add one with `suite add NAME PATH`.")
     else:
-        rows = [(app.name, display_path(app.local_dir), app.remote or "-") for app in config.apps]
+        rows = [
+            (app.name, display_path(app.local_dir), app.remote or "-")
+            for app in sorted(config.apps, key=_app_sort_key)
+        ]
         _print_table(("NAME", "LOCAL DIR", "REMOTE"), rows)
     print()
     print(f"Config: {display_path(config.path)} ({_plural(len(config.apps), 'app')})")
