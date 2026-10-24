@@ -10,8 +10,7 @@ import platformdirs
 import yaml
 
 from .errors import SuiteError
-from .models import App, SuiteEntry
-from .org import parse_org
+from .models import App, AppKind
 
 CONFIG_ENV = "SUITE_CONFIG"
 CONFIG_FILENAME = "config.yaml"
@@ -34,12 +33,6 @@ class ConfigError(SuiteError):
     """The configuration file is missing, invalid, or cannot be written."""
 
 
-@dataclass(frozen=True, slots=True)
-class SyncStats:
-    added: tuple[str, ...] = ()
-    updated: tuple[str, ...] = ()
-
-
 @dataclass
 class Config:
     """The suite database, stored as YAML."""
@@ -50,16 +43,13 @@ class Config:
     created: bool = False
 
     @classmethod
-    def load(cls, path: Path | None = None, *, org_path: Path | None = None) -> Config:
-        """Load the config, creating it from suite.org on first run."""
+    def load(cls, path: Path | None = None) -> Config:
+        """Load the config, creating an empty one on first run."""
         config_path = config_path_from_env() if path is None else path.expanduser()
         if config_path.is_dir():
             raise ConfigError(f"config path is a directory: {config_path}")
         if not config_path.exists():
-            org_file = org_path if org_path is not None else Path.cwd() / "suite.org"
             config = cls(path=config_path, apps_root=DEFAULT_APPS_ROOT.expanduser())
-            if org_file.is_file():
-                config.sync_from_org(org_file)
             config.save()
             config.created = True
             return config
@@ -112,12 +102,14 @@ class Config:
                 raise ConfigError(f"app {name!r} is missing a valid 'local_dir' in {path}")
             remote = _optional_string(entry.get("remote"), "remote", name, path)
             description = _optional_string(entry.get("description"), "description", name, path)
+            kind = _parse_kind(entry.get("kind"), name, path)
             apps.append(
                 App(
                     name=name,
                     local_dir=_resolve_path(local_dir_raw, base),
                     remote=remote,
                     description=description,
+                    kind=kind,
                 )
             )
         return cls(path=path, apps_root=_resolve_path(apps_root_raw, base), apps=apps)
@@ -146,9 +138,13 @@ class Config:
     def find(self, name: str) -> App | None:
         return next((app for app in self.apps if app.name == name), None)
 
-    def add_app(self, app: App) -> None:
-        if self.find(app.name) is not None:
-            raise ConfigError(f"app {app.name!r} already exists in {self.path}")
+    def add_app(self, app: App, *, overwrite: bool = False) -> None:
+        existing = self.find(app.name)
+        if existing is not None:
+            if not overwrite:
+                raise ConfigError(f"app {app.name!r} already exists in {self.path}")
+            self.apps[self.apps.index(existing)] = app
+            return
         self.apps.append(app)
 
     def remove_app(self, name: str) -> App:
@@ -157,45 +153,6 @@ class Config:
             raise ConfigError(f"app {name!r} is not configured")
         self.apps.remove(app)
         return app
-
-    def sync_from_org(self, org_file: Path) -> SyncStats:
-        """Merge apps from an org file, preserving existing local directories."""
-        try:
-            text = org_file.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ConfigError(f"could not read {org_file}: {exc}") from exc
-
-        added: list[str] = []
-        updated: list[str] = []
-        for entry in parse_org(text):
-            existing = self.find(entry.name)
-            if existing is None:
-                self.apps.append(
-                    App(
-                        name=entry.name,
-                        local_dir=_new_local_dir(entry, self.apps_root, org_file),
-                        remote=entry.remote,
-                        description=entry.description,
-                    )
-                )
-                added.append(entry.name)
-                continue
-
-            remote = entry.remote if entry.remote is not None else existing.remote
-            description = (
-                entry.description if entry.description is not None else existing.description
-            )
-            if remote != existing.remote or description != existing.description:
-                index = self.apps.index(existing)
-                self.apps[index] = App(
-                    name=existing.name,
-                    local_dir=existing.local_dir,
-                    remote=remote,
-                    description=description,
-                )
-                updated.append(entry.name)
-
-        return SyncStats(added=tuple(added), updated=tuple(updated))
 
 
 def config_path_from_env() -> Path:
@@ -248,14 +205,14 @@ def _app_to_mapping(app: App) -> dict[str, str]:
         mapping["remote"] = app.remote
     if app.description:
         mapping["description"] = app.description
+    if app.kind == "misc":
+        mapping["kind"] = app.kind
     return mapping
 
 
-def _new_local_dir(entry: SuiteEntry, apps_root: Path, org_file: Path) -> Path:
-    if entry.local_dir is not None:
-        return absolute_path(entry.local_dir)
-    for base in (org_file.parent, Path.cwd(), apps_root):
-        candidate = base / entry.name
-        if candidate.is_dir():
-            return candidate
-    return apps_root / entry.name
+def _parse_kind(value: object, app_name: str, path: Path) -> AppKind:
+    if value is None:
+        return "app"
+    if isinstance(value, str) and value in ("app", "misc"):
+        return value
+    raise ConfigError(f"app {app_name!r} has an invalid 'kind' in {path}")

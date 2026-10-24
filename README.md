@@ -1,12 +1,14 @@
 # suite
 
 `suite` keeps a local database of your applications and checks each one for
-uncommitted changes and commits waiting to be pulled.
+uncommitted changes, commits waiting to be pulled, and installed bash
+completions.
 
 Repository: <https://github.com/8cylinder/suite>
 
-The database is a YAML file seeded from [`suite.org`](./suite.org) on first run.
-Each entry stores the application name, local checkout, remote, and description.
+The database is a YAML file created on first run. Each entry stores the
+application name, local checkout, remote, description, and optionally whether
+the directory is a collection rather than a single app.
 
 ## Requirements
 
@@ -53,11 +55,8 @@ directory:
 Use `suite config` to print the exact path and `suite config --show` to print
 the file. Set `SUITE_CONFIG=/path/to/config.yaml` to use a different file.
 
-On first run, `suite` reads `suite.org` from the current directory and seeds the
-database. It looks for each checkout next to `suite.org` first, then falls back
-to `~/dev/<name>`. Existing entries are never moved by `suite sync`, so edit
-`local_dir` in the config file (or use `suite add NAME PATH`) if your
-repositories live somewhere else.
+On first run, `suite` creates an empty database. Add each application with
+`suite add NAME PATH`, using a path that points at its local checkout.
 
 ```yaml
 # suite configuration
@@ -71,6 +70,9 @@ apps:
   - name: tether
     local_dir: ~/dev/tether
     remote: git@github.com:8cylinder/tether.git
+  - name: bin
+    local_dir: ~/bin
+    kind: misc
 ```
 
 ## Global options
@@ -95,9 +97,8 @@ install` first if you normally use `uv run suite`.
 | `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, installed completions, and prompt project registration. |
 | `suite` | List configured applications and their local directories (same as `suite list`). |
 | `suite list` | List configured applications and their local directories. |
-| `suite add NAME PATH [--remote URL] [--description TEXT]` | Add an application whose checkout already exists at `PATH`. |
+| `suite add NAME PATH [--remote URL] [--description TEXT] [--misc]` | Add an application whose checkout already exists at `PATH`. |
 | `suite remove NAME` | Remove an application from the database. |
-| `suite sync [FILE]` | Add new applications from `suite.org` and refresh their metadata. |
 | `suite config [--show]` | Print the config path, optionally with the file contents. |
 
 ### `check`
@@ -125,13 +126,20 @@ alphabetical order by name. Running `suite` without a command does the same.
 ### `add`
 
 ```text
-suite add NAME PATH [-r/--remote URL] [--description TEXT]
+suite add NAME PATH [-r/--remote URL] [--description TEXT] [--misc]
 ```
 
 `PATH` must point at an existing directory. `add` saves the checkout's git
 remote (preferring `origin`) to the config; use `--remote` to override the
-detected URL. If the checkout has no remote, `suite add` fails. To add an
-application from `suite.org`, use `suite sync` instead.
+detected URL. If the checkout has no remote, `suite add` fails.
+
+Use `--misc` for a directory such as `~/bin` that holds a collection of small
+apps and docs rather than a single application. Misc entries are stored with
+`kind: misc` and are not checked for bash completions.
+
+If `NAME` is already configured, `add` asks before overwriting the existing
+record. Confirming replaces the stored local directory, remote, description,
+and misc flag; declining leaves the record unchanged.
 
 ### `remove`
 
@@ -140,16 +148,6 @@ suite remove NAME
 ```
 
 Removes an application from the database. It does not delete the checkout.
-
-### `sync`
-
-```text
-suite sync [FILE]
-```
-
-Reads the given org file (default: `./suite.org`), adds applications that are
-not configured yet, and refreshes remote and description metadata for existing
-applications. Existing `local_dir` values are preserved.
 
 ### `config`
 
@@ -178,8 +176,9 @@ to `~/.prompt-projects` before the table is printed.
 The **CMP** column shows `✓` when the application's completion script is
 installed at `~/.local/share/bash-completion/completions/APP` (or
 `$XDG_DATA_HOME/bash-completion/completions/APP` when `XDG_DATA_HOME` is set),
-and `x` when it is missing. Install completions with `APP --completions`. A
-missing script is informational: it does not affect `check`'s exit code.
+and `x` when it is missing. Install completions with `APP --completions`. Misc
+entries show a dim `-` because completions do not apply to them. A missing
+script is informational: it does not affect `check`'s exit code.
 
 The table is colorized with [Rich](https://github.com/Textualize/rich): green for
 clean or up-to-date values, yellow for changes or commits to pull/push, red for
@@ -192,8 +191,9 @@ APP     PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL
 cm      x    ✓    2 changes    1 commit     3 commits    origin/main
 tether  ✓    x    clean        up to date   up to date    origin/main
 prism   ✓    x    -            -            -             missing: ~/dev/prism
+bin     x    -    clean        up to date   up to date    origin/main
 
-3 apps: 1 with changes to commit, 1 with commits to pull,
+4 apps: 1 with changes to commit, 1 with commits to pull,
 1 with commits to push, 1 with problems.
 ```
 

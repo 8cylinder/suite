@@ -18,7 +18,6 @@ from .git import check_app, get_remote_url
 from .models import App, CheckResult
 from .prompt_projects import add_projects, load_projects
 
-DEFAULT_ORG_FILE = "suite.org"
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 CHECK_HEADERS = ("APP", "PRJ", "CMP", "TO COMMIT", "TO PUSH", "TO PULL", "DETAIL")
@@ -85,6 +84,11 @@ def list_apps(ctx: click.Context) -> None:
 )
 @click.option("-r", "--remote", help="override the checkout's git remote URL")
 @click.option("--description", help="short description")
+@click.option(
+    "--misc",
+    is_flag=True,
+    help="mark a collection of apps and docs instead of a single app",
+)
 @click.pass_context
 def add(
     ctx: click.Context,
@@ -92,8 +96,9 @@ def add(
     path: Path,
     remote: str | None,
     description: str | None,
+    misc: bool,
 ) -> None:
-    ctx.exit(_cmd_add(_load_config(), name, path, remote, description))
+    ctx.exit(_cmd_add(_load_config(), name, path, remote, description, misc))
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS, help="remove an application")
@@ -101,23 +106,6 @@ def add(
 @click.pass_context
 def remove(ctx: click.Context, name: str) -> None:
     ctx.exit(_cmd_remove(_load_config(), name))
-
-
-@cli.command(
-    context_settings=CONTEXT_SETTINGS,
-    help="add applications from an org file (default: ./suite.org)",
-)
-@click.argument(
-    "file",
-    required=False,
-    default=Path(DEFAULT_ORG_FILE),
-    type=click.Path(path_type=Path),
-    metavar="FILE",
-    help="org file to read",
-)
-@click.pass_context
-def sync(ctx: click.Context, file: Path) -> None:
-    ctx.exit(_cmd_sync(_load_config(), file))
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS, help="show the config file location")
@@ -197,7 +185,7 @@ def _cmd_check(
         result = check_app(app, fetch=not no_fetch)
         results.append(result)
         listed = app.name in projects
-        has_completion = has_bash_completion(app.name)
+        has_completion = None if app.kind == "misc" else has_bash_completion(app.name)
         console.print(
             _format_check_row(
                 _check_row(result, listed, has_completion),
@@ -250,11 +238,11 @@ def _print_check_summary(results: list[CheckResult]) -> None:
 
 
 def _check_row(
-    result: CheckResult, listed: bool, has_completion: bool
+    result: CheckResult, listed: bool, has_completion: bool | None
 ) -> tuple[str, str, str, str, str, str, str]:
     name = result.app.name
     project = "✓" if listed else "x"
-    completion = "✓" if has_completion else "x"
+    completion = "-" if has_completion is None else ("✓" if has_completion else "x")
     if result.state == "missing":
         return (
             name,
@@ -300,10 +288,10 @@ def _check_row(
 
 
 def _check_styles(
-    result: CheckResult, listed: bool, has_completion: bool
+    result: CheckResult, listed: bool, has_completion: bool | None
 ) -> tuple[str, str, str, str, str, str, str]:
     project = "green" if listed else "red"
-    completion = "green" if has_completion else "red"
+    completion = "dim" if has_completion is None else "green" if has_completion else "red"
     if result.state != "ok":
         return ("bold red", project, completion, "dim", "dim", "dim", "red")
 
@@ -351,6 +339,7 @@ def _cmd_add(
     path: Path,
     remote: str | None,
     description: str | None,
+    misc: bool,
 ) -> int:
     name = name.strip()
     if not name:
@@ -369,11 +358,20 @@ def _cmd_add(
         local_dir=local_dir,
         remote=remote,
         description=(description or "").strip() or None,
+        kind="misc" if misc else "app",
     )
-    config.add_app(app)
+    existing = config.find(app.name)
+    if existing is not None and not click.confirm(
+        f"App {app.name!r} already exists. Overwrite?", default=False
+    ):
+        print(f"Kept existing {app.name}.")
+        return 0
+
+    config.add_app(app, overwrite=existing is not None)
     config.save()
 
-    print(f"Added {app.name} -> {display_path(app.local_dir)}")
+    action = "Updated" if existing is not None else "Added"
+    print(f"{action} {app.name} -> {display_path(app.local_dir)}")
     return 0
 
 
@@ -381,25 +379,6 @@ def _cmd_remove(config: Config, name: str) -> int:
     app = config.remove_app(name.strip())
     config.save()
     print(f"Removed {app.name} ({display_path(app.local_dir)})")
-    return 0
-
-
-def _cmd_sync(config: Config, file: Path) -> int:
-    org_file = absolute_path(file)
-    if not org_file.is_file():
-        raise SuiteError(f"org file not found: {org_file}")
-
-    stats = config.sync_from_org(org_file)
-    if stats.added or stats.updated:
-        config.save()
-
-    changes: list[str] = []
-    if stats.added:
-        changes.append(f"{len(stats.added)} added")
-    if stats.updated:
-        changes.append(f"{len(stats.updated)} updated")
-    summary = ", ".join(changes) if changes else "no changes"
-    print(f"Synced {display_path(org_file)}: {summary}.")
     return 0
 
 

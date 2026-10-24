@@ -78,19 +78,103 @@ def test_add_list_remove(
     assert "No apps configured." in capsys.readouterr().out
 
 
-def test_add_duplicate_is_an_error(
+def test_add_misc_writes_kind(
     config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    local_dir = tmp_path / "bin"
+    local_dir.mkdir()
+
+    assert (
+        main(
+            [
+                "add",
+                "bin",
+                str(local_dir),
+                "--remote",
+                "git@example.com:bin.git",
+                "--misc",
+            ]
+        )
+        == 0
+    )
+
+    data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    assert data["apps"] == [
+        {
+            "name": "bin",
+            "local_dir": str(local_dir),
+            "remote": "git@example.com:bin.git",
+            "kind": "misc",
+        }
+    ]
+
+
+def test_add_existing_app_can_be_overwritten(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     (tmp_path / "cm").mkdir()
     (tmp_path / "other").mkdir()
     assert main(["add", "cm", str(tmp_path / "cm"), "--remote", "git@example.com:cm.git"]) == 0
+
+    prompts: list[tuple[str, bool]] = []
+
+    def fake_confirm(message: str, *, default: bool = False) -> bool:
+        prompts.append((message, default))
+        return True
+
+    monkeypatch.setattr(cli.click, "confirm", fake_confirm)
     capsys.readouterr()
 
     assert (
-        main(["add", "cm", str(tmp_path / "other"), "--remote", "git@example.com:other.git"]) == 2
+        main(
+            [
+                "add",
+                "cm",
+                str(tmp_path / "other"),
+                "--remote",
+                "git@example.com:other.git",
+                "--misc",
+            ]
+        )
+        == 0
     )
 
-    assert "already exists" in capsys.readouterr().err
+    assert prompts == [("App 'cm' already exists. Overwrite?", False)]
+    data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    assert data["apps"] == [
+        {
+            "name": "cm",
+            "local_dir": str(tmp_path / "other"),
+            "remote": "git@example.com:other.git",
+            "kind": "misc",
+        }
+    ]
+    assert "Updated cm" in capsys.readouterr().out
+
+
+def test_add_existing_app_can_keep_the_record(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "cm").mkdir()
+    (tmp_path / "other").mkdir()
+    assert main(["add", "cm", str(tmp_path / "cm"), "--remote", "git@example.com:cm.git"]) == 0
+    before = config_file.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(cli.click, "confirm", lambda message, *, default=False: False)
+    capsys.readouterr()
+
+    assert (
+        main(["add", "cm", str(tmp_path / "other"), "--remote", "git@example.com:other.git"]) == 0
+    )
+
+    assert config_file.read_text(encoding="utf-8") == before
+    assert "Kept existing cm." in capsys.readouterr().out
 
 
 def test_add_requires_an_existing_directory(
@@ -349,6 +433,38 @@ def test_check_shows_completion_status(
     assert "two  x    x" in output
 
 
+def test_check_shows_dash_for_misc_completion(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    for name in ("bin", "one"):
+        script = data_home / "bash-completion" / "completions" / name
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("script\n", encoding="utf-8")
+
+        (tmp_path / name).mkdir()
+        args = ["add", name, str(tmp_path / name), "--remote", f"git@example.com:{name}.git"]
+        if name == "bin":
+            args.append("--misc")
+        assert main(args) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    output = capsys.readouterr().out
+    assert "bin  x    -" in output
+    assert "one  x    ✓" in output
+
+
 def test_check_colors_the_status_columns(
     config_file: Path,
     tmp_path: Path,
@@ -457,29 +573,6 @@ def test_check_update_dot_project_adds_missing_projects(
     lines = projects_file.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "one\t/tmp/one\t#111111"
     assert lines[1].startswith(f"two\t{tmp_path / 'two'}\t#")
-
-
-def test_sync_from_org_file(
-    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    org_file = tmp_path / "apps.org"
-    org_file.write_text(
-        """\
-* Apps
-** cm
-Generate a commit message.
-remote: =git@example.com:cm.git=
-""",
-        encoding="utf-8",
-    )
-
-    assert main(["sync", str(org_file)]) == 0
-    assert "1 added" in capsys.readouterr().out
-    assert main(["list"]) == 0
-    assert "cm" in capsys.readouterr().out
-
-    assert main(["sync", str(org_file)]) == 0
-    assert "no changes" in capsys.readouterr().out
 
 
 def test_config_show(config_file: Path, capsys: pytest.CaptureFixture[str]) -> None:

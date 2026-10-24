@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal
 
 CheckState = Literal["ok", "missing", "not-git", "error"]
+AppKind = Literal["app", "misc"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,16 +16,7 @@ class App:
     local_dir: Path
     remote: str | None = None
     description: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SuiteEntry:
-    """An application read from suite.org."""
-
-    name: str
-    description: str | None = None
-    remote: str | None = None
-    local_dir: Path | None = None
+    kind: AppKind = "app"
 
 
 @dataclass(frozen=True, slots=True)
