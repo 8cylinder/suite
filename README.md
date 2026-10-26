@@ -112,7 +112,11 @@ suite check [APP ...] [--no-fetch] [--update-dot-project]
 - `--update-dot-project`: add missing applications to `~/.prompt-projects`
   before printing the table.
 
-Applications are checked and printed in alphabetical order by name.
+Applications are checked and printed in alphabetical order by name. When
+stdout is not a terminal, the header and the `N apps:` summary are omitted and
+the remaining columns are separated by a single tab, so each application is one
+line of tab-separated fields (for example `suite check | sort`, or
+`suite check | cut -f1,4-7`).
 
 ### `list`
 
@@ -122,6 +126,9 @@ suite list
 
 Prints the configured application name, local directory, and remote in
 alphabetical order by name. Running `suite` without a command does the same.
+The header row and `Config:` footer are only shown on a terminal; when piped
+(for example `suite | sort`), the output is one tab-separated line per
+application.
 
 ### `add`
 
@@ -184,7 +191,7 @@ The table is colorized with [Rich](https://github.com/Textualize/rich): green fo
 clean or up-to-date values, yellow for changes or commits to pull/push, red for
 unregistered projects, missing completions, and application problems, and dim
 for neutral details. Colors are disabled automatically when output is not a
-terminal.
+terminal, along with the header and summary.
 
 ```text
 APP     PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL

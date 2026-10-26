@@ -145,6 +145,14 @@ def _load_config() -> Config:
     return config
 
 
+def _stdout_is_tty() -> bool:
+    """Report whether stdout is a terminal, where table chrome makes sense."""
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
 def _cmd_check(
     config: Config,
     names: list[str],
@@ -162,8 +170,12 @@ def _cmd_check(
         apps = config.apps
     apps = sorted(apps, key=_app_sort_key)
 
+    tty = _stdout_is_tty()
     if not apps:
-        print("No apps configured. Add one with `suite add NAME PATH`.")
+        print(
+            "No apps configured. Add one with `suite add NAME PATH`.",
+            file=sys.stdout if tty else sys.stderr,
+        )
         return 0
 
     projects = set(load_projects())
@@ -171,14 +183,18 @@ def _cmd_check(
     if update_dot_project and missing:
         added = add_projects(missing)
         projects.update(app.name for app in added)
-        print(f"Added {_plural(len(added), 'project')} to ~/.prompt-projects")
+        print(
+            f"Added {_plural(len(added), 'project')} to ~/.prompt-projects",
+            file=sys.stdout if tty else sys.stderr,
+        )
 
     console = Console()
     widths = _check_column_widths(apps)
-    console.print(
-        _format_check_row(CHECK_HEADERS, widths, ("bold",) * len(CHECK_HEADERS)),
-        soft_wrap=True,
-    )
+    if tty:
+        console.print(
+            _format_check_row(CHECK_HEADERS, widths, ("bold",) * len(CHECK_HEADERS)),
+            soft_wrap=True,
+        )
 
     results: list[CheckResult] = []
     for app in apps:
@@ -186,21 +202,22 @@ def _cmd_check(
         results.append(result)
         listed = app.name in projects
         has_completion = None if app.kind == "misc" else has_bash_completion(app.name)
-        console.print(
-            _format_check_row(
-                _check_row(result, listed, has_completion),
-                widths,
-                _check_styles(result, listed, has_completion),
-            ),
-            soft_wrap=True,
-        )
+        row = _check_row(result, listed, has_completion)
+        if tty:
+            console.print(
+                _format_check_row(row, widths, _check_styles(result, listed, has_completion)),
+                soft_wrap=True,
+            )
+        else:
+            print("\t".join(row))
         if result.fetch_error:
             print(
                 f"suite: warning: {result.app.name}: {result.fetch_error}",
                 file=sys.stderr,
             )
 
-    _print_check_summary(results)
+    if tty:
+        _print_check_summary(results)
     return 1 if any(result.has_problem for result in results) else 0
 
 
@@ -320,16 +337,25 @@ def _app_sort_key(app: App) -> str:
 
 
 def _cmd_list(config: Config) -> int:
+    tty = _stdout_is_tty()
     if not config.apps:
-        print("No apps configured. Add one with `suite add NAME PATH`.")
+        print(
+            "No apps configured. Add one with `suite add NAME PATH`.",
+            file=sys.stdout if tty else sys.stderr,
+        )
     else:
         rows = [
             (app.name, display_path(app.local_dir), app.remote or "-")
             for app in sorted(config.apps, key=_app_sort_key)
         ]
-        _print_table(("NAME", "LOCAL DIR", "REMOTE"), rows)
-    print()
-    print(f"Config: {display_path(config.path)} ({_plural(len(config.apps), 'app')})")
+        if tty:
+            _print_table(("NAME", "LOCAL DIR", "REMOTE"), rows)
+        else:
+            for row in rows:
+                print("\t".join(row))
+    if tty:
+        print()
+        print(f"Config: {display_path(config.path)} ({_plural(len(config.apps), 'app')})")
     return 0
 
 

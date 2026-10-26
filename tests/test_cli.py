@@ -23,7 +23,15 @@ def config_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return path
 
 
-def test_first_run_creates_config(config_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.fixture
+def tty_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Present stdout as a terminal so table chrome is printed."""
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: True)
+
+
+def test_first_run_creates_config(
+    config_file: Path, tty_output: None, capsys: pytest.CaptureFixture[str]
+) -> None:
     exit_code = main(["list"])
 
     assert exit_code == 0
@@ -35,7 +43,7 @@ def test_first_run_creates_config(config_file: Path, capsys: pytest.CaptureFixtu
 
 
 def test_plain_invocation_lists_apps(
-    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    config_file: Path, tty_output: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     local_dir = tmp_path / "cm"
     local_dir.mkdir()
@@ -51,8 +59,49 @@ def test_plain_invocation_lists_apps(
     assert "Usage: suite" not in output
 
 
+def test_list_prints_rows_only_when_piped(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("zeta", "alpha"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(["add", name, str(tmp_path / name), "--remote", f"git@example.com:{name}.git"])
+            == 0
+        )
+    capsys.readouterr()
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+
+    assert main(["list"]) == 0
+
+    output = capsys.readouterr().out
+    lines = output.splitlines()
+    assert lines == [
+        f"alpha\t{tmp_path / 'alpha'}\tgit@example.com:alpha.git",
+        f"zeta\t{tmp_path / 'zeta'}\tgit@example.com:zeta.git",
+    ]
+    assert "NAME" not in output
+    assert "Config:" not in output
+
+
+def test_list_no_apps_message_goes_to_stderr_when_piped(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+
+    assert main(["list"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No apps configured." in captured.err
+
+
 def test_add_list_remove(
-    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    config_file: Path, tty_output: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     local_dir = tmp_path / "cm"
     local_dir.mkdir()
@@ -230,7 +279,7 @@ def test_add_rejects_a_file_path(
 
 
 def test_check_reports_missing_app(
-    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    config_file: Path, tty_output: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     local_dir = tmp_path / "missing"
     local_dir.mkdir()
@@ -250,7 +299,7 @@ def test_check_reports_missing_app(
 
 
 def test_list_sorts_apps_by_name(
-    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    config_file: Path, tty_output: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     for name in ("zeta", "alpha", "mu"):
         (tmp_path / name).mkdir()
@@ -343,6 +392,56 @@ def test_check_prints_each_app_as_it_is_checked(
     assert checked == ["one", "two"]
 
 
+def test_check_prints_rows_only_when_piped(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [
+        "one\tx\tx\tclean\t-\tno upstream\tdetached HEAD",
+    ]
+    assert captured.err == ""
+
+
+def test_check_piped_row_keeps_detail_in_last_field(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    local_dir = tmp_path / "missing"
+    local_dir.mkdir()
+    assert (
+        main(["add", "missing-app", str(local_dir), "--remote", "git@example.com:missing.git"]) == 0
+    )
+    local_dir.rmdir()
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 1
+
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    fields = lines[0].split("\t")
+    assert len(fields) == 7
+    assert fields[0] == "missing-app"
+    assert fields[6] == f"missing: {local_dir}"
+
+
 def test_check_unknown_app_is_an_error(
     config_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -352,6 +451,7 @@ def test_check_unknown_app_is_an_error(
 
 def test_check_shows_prompt_project_status(
     config_file: Path,
+    tty_output: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -394,6 +494,7 @@ def test_check_shows_prompt_project_status(
 
 def test_check_shows_completion_status(
     config_file: Path,
+    tty_output: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -435,6 +536,7 @@ def test_check_shows_completion_status(
 
 def test_check_shows_dash_for_misc_completion(
     config_file: Path,
+    tty_output: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -467,6 +569,7 @@ def test_check_shows_dash_for_misc_completion(
 
 def test_check_colors_the_status_columns(
     config_file: Path,
+    tty_output: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -503,6 +606,7 @@ def test_check_colors_the_status_columns(
 
 def test_check_reports_commits_to_push(
     config_file: Path,
+    tty_output: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -533,6 +637,7 @@ def test_check_reports_commits_to_push(
 
 def test_check_update_dot_project_adds_missing_projects(
     config_file: Path,
+    tty_output: None,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
