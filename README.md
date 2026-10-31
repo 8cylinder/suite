@@ -75,6 +75,11 @@ apps:
     kind: misc
 ```
 
+Paths in the config file may be absolute or start with `~` or an environment
+variable such as `$HOME` or `${HOME}`. `suite list` always prints absolute
+paths, while `suite add` stores paths under the home directory with `~` and all
+other paths as absolute paths.
+
 ## Global options
 
 | Option | Description |
@@ -197,7 +202,7 @@ terminal, along with the header and summary.
 APP     PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL
 cm      x    ✓    2 changes    1 commit     3 commits    origin/main
 tether  ✓    x    clean        up to date   up to date    origin/main
-prism   ✓    x    -            -            -             missing: ~/dev/prism
+prism   ✓    x    -            -            -             missing: /home/user/dev/prism
 bin     x    -    clean        up to date   up to date    origin/main
 
 4 apps: 1 with changes to commit, 1 with commits to pull,

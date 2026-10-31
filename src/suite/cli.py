@@ -12,7 +12,7 @@ from rich.text import Text
 
 from . import __version__
 from .completions import has_bash_completion, install_bash_completion
-from .config import Config, absolute_path, display_path
+from .config import Config, absolute_path, display_path, stored_path
 from .errors import SuiteError
 from .git import check_app, get_remote_url
 from .models import App, CheckResult
@@ -397,14 +397,14 @@ def _cmd_add(
     config.save()
 
     action = "Updated" if existing is not None else "Added"
-    print(f"{action} {app.name} -> {display_path(app.local_dir)}")
+    print(f"{action} {app.name} -> {stored_path(app.local_dir)}")
     return 0
 
 
 def _cmd_remove(config: Config, name: str) -> int:
     app = config.remove_app(name.strip())
     config.save()
-    print(f"Removed {app.name} ({display_path(app.local_dir)})")
+    print(f"Removed {app.name} ({stored_path(app.local_dir)})")
     return 0
 
 

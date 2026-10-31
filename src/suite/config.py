@@ -45,7 +45,7 @@ class Config:
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
         """Load the config, creating an empty one on first run."""
-        config_path = config_path_from_env() if path is None else path.expanduser()
+        config_path = config_path_from_env() if path is None else _expand_path(path)
         if config_path.is_dir():
             raise ConfigError(f"config path is a directory: {config_path}")
         if not config_path.exists():
@@ -116,7 +116,7 @@ class Config:
 
     def save(self) -> None:
         data = {
-            "apps_root": _encode_path(self.apps_root),
+            "apps_root": stored_path(self.apps_root),
             "apps": [_app_to_mapping(app) for app in self.apps],
         }
         try:
@@ -158,36 +158,43 @@ class Config:
 def config_path_from_env() -> Path:
     override = os.environ.get(CONFIG_ENV)
     if override:
-        return Path(override).expanduser()
+        return _expand_path(override)
     directory = platformdirs.user_config_dir("suite", appauthor=False)
     return Path(directory) / CONFIG_FILENAME
 
 
 def display_path(path: Path) -> str:
-    """Render a path with the home directory abbreviated to ``~``."""
+    """Render a path as an absolute path."""
+    return str(path.expanduser().absolute())
+
+
+def stored_path(path: Path) -> str:
+    """Render a path for the config, abbreviating the home directory to ``~``."""
+    expanded = path.expanduser()
     try:
-        relative = path.expanduser().relative_to(Path.home())
+        relative = expanded.relative_to(Path.home())
     except ValueError:
-        return str(path)
+        return display_path(expanded)
     return "~" if str(relative) == "." else f"~/{relative.as_posix()}"
 
 
 def absolute_path(path: Path, *, base: Path | None = None) -> Path:
-    expanded = path.expanduser()
+    expanded = _expand_path(path)
     if expanded.is_absolute():
         return expanded
     return ((base if base is not None else Path.cwd()) / expanded).resolve()
 
 
 def _resolve_path(value: str, base: Path) -> Path:
-    path = Path(value).expanduser()
+    path = _expand_path(value)
     if not path.is_absolute():
         path = (base / path).resolve()
     return path
 
 
-def _encode_path(path: Path) -> str:
-    return display_path(path)
+def _expand_path(value: str | Path) -> Path:
+    """Expand environment variables and a leading ``~`` in a path."""
+    return Path(os.path.expandvars(value)).expanduser()
 
 
 def _optional_string(value: object, field_name: str, app_name: str, path: Path) -> str | None:
@@ -200,7 +207,7 @@ def _optional_string(value: object, field_name: str, app_name: str, path: Path) 
 
 
 def _app_to_mapping(app: App) -> dict[str, str]:
-    mapping = {"name": app.name, "local_dir": _encode_path(app.local_dir)}
+    mapping = {"name": app.name, "local_dir": stored_path(app.local_dir)}
     if app.remote:
         mapping["remote"] = app.remote
     if app.description:

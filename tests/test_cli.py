@@ -127,6 +127,60 @@ def test_add_list_remove(
     assert "No apps configured." in capsys.readouterr().out
 
 
+def test_add_stores_home_paths_with_tilde(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    in_home = home / "dev" / "cm"
+    outside = tmp_path / "opt" / "cm"
+    in_home.mkdir(parents=True)
+    outside.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    assert main(["add", "home-app", str(in_home), "--remote", "git@example.com:home.git"]) == 0
+    assert main(["add", "outside-app", str(outside), "--remote", "git@example.com:out.git"]) == 0
+
+    data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+    stored = {app["name"]: app["local_dir"] for app in data["apps"]}
+    assert stored["home-app"] == "~/dev/cm"
+    assert stored["outside-app"] == str(outside)
+    assert "Added home-app -> ~/dev/cm" in capsys.readouterr().out
+
+
+def test_list_expands_home_paths_to_absolute(
+    config_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+    config_file.write_text(
+        """\
+apps:
+  - name: cm
+    local_dir: ~/dev/cm
+    remote: git@example.com:cm.git
+  - name: other
+    local_dir: $HOME/dev/other
+    remote: git@example.com:other.git
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["list"]) == 0
+
+    output = capsys.readouterr().out
+    assert f"cm\t{home / 'dev' / 'cm'}\tgit@example.com:cm.git" in output
+    assert f"other\t{home / 'dev' / 'other'}\tgit@example.com:other.git" in output
+    assert "~/" not in output
+
+
 def test_add_misc_writes_kind(
     config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
