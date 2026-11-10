@@ -117,11 +117,14 @@ suite check [APP ...] [--no-fetch] [--update-dot-project]
 - `--update-dot-project`: add missing applications to `~/.prompt-projects`
   before printing the table.
 
-Applications are checked and printed in alphabetical order by name. When
-stdout is not a terminal, the header and the `N apps:` summary are omitted and
-the remaining columns are separated by a single tab, so each application is one
-line of tab-separated fields (for example `suite check | sort`, or
-`suite check | cut -f1,4-7`).
+Applications are checked in parallel, one thread per application, then printed
+once every check has finished, in alphabetical order by name. On a terminal a
+spinner is shown while the checks run. When
+stdout is not a terminal, the header is omitted and the remaining columns are
+separated by a single tab, so each application is one line of tab-separated
+fields (for example `suite check | sort`, or `suite check | cut -f1,4-7`). When
+no row has a detail value, the DETAIL field is omitted and each line has six
+fields instead of seven.
 
 ### `list`
 
@@ -192,21 +195,24 @@ and `x` when it is missing. Install completions with `APP --completions`. Misc
 entries show a dim `-` because completions do not apply to them. A missing
 script is informational: it does not affect `check`'s exit code.
 
+The **DETAIL** column stays blank for applications that track an upstream
+branch. It shows the local branch when there is no upstream, `detached HEAD`
+when the checkout is detached, and the reason an application is missing, is not
+a git repository, or could not be inspected. When every row is blank the column
+is omitted entirely.
+
 The table is colorized with [Rich](https://github.com/Textualize/rich): green for
 clean or up-to-date values, yellow for changes or commits to pull/push, red for
 unregistered projects, missing completions, and application problems, and dim
 for neutral details. Colors are disabled automatically when output is not a
-terminal, along with the header and summary.
+terminal, along with the header.
 
 ```text
 APP     PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL
-cm      x    ✓    2 changes    1 commit     3 commits    origin/main
-tether  ✓    x    clean        up to date   up to date    origin/main
+cm      x    ✓    2 changes    1 commit     3 commits
+tether  ✓    x    clean        up to date   up to date
 prism   ✓    x    -            -            -             missing: /home/user/dev/prism
-bin     x    -    clean        up to date   up to date    origin/main
-
-4 apps: 1 with changes to commit, 1 with commits to pull,
-1 with commits to push, 1 with problems.
+bin     x    -    clean        up to date   up to date
 ```
 
 ### Exit codes

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import io
+import re
 import subprocess
 import sys
+import threading
 import tomllib
 from pathlib import Path
 
@@ -27,6 +29,15 @@ def config_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def tty_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """Present stdout as a terminal so table chrome is printed."""
     monkeypatch.setattr(cli, "_stdout_is_tty", lambda: True)
+
+
+def _table_fields(output: str, name: str) -> list[str]:
+    """Split a rendered table row into its cells, keeping spaces inside cells."""
+    for line in output.splitlines():
+        cells = re.split(r"\s{2,}", line.strip())
+        if cells and cells[0] == name:
+            return cells
+    raise AssertionError(f"no table row for {name!r} in:\n{output}")
 
 
 def test_first_run_creates_config(
@@ -349,7 +360,7 @@ def test_check_reports_missing_app(
     captured = capsys.readouterr()
     assert "missing-app" in captured.out
     assert "missing:" in captured.out
-    assert "1 with problems" in captured.out
+    assert "with problems" not in captured.out
 
 
 def test_list_sorts_apps_by_name(
@@ -409,10 +420,47 @@ def test_check_sorts_apps_by_name(
     monkeypatch.setattr(cli, "check_app", fake_check_app)
 
     assert main(["check", "--no-fetch"]) == 0
-    assert checked == ["alpha", "mu", "zeta"]
+    assert sorted(checked) == ["alpha", "mu", "zeta"]
+    names = [line.split("\t")[0] for line in capsys.readouterr().out.splitlines()]
+    assert names == ["alpha", "mu", "zeta"]
 
 
-def test_check_prints_each_app_as_it_is_checked(
+def test_check_runs_apps_concurrently(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("one", "two"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+    capsys.readouterr()
+
+    barrier = threading.Barrier(2, timeout=5)
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        # Both workers must be in flight at the same time for this to return.
+        barrier.wait()
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+
+    assert main(["check", "--no-fetch"]) == 0
+    assert not barrier.broken
+
+
+def test_check_prints_results_after_all_checks_finish(
     config_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for name in ("one", "two"):
@@ -435,15 +483,16 @@ def test_check_prints_each_app_as_it_is_checked(
     checked: list[str] = []
 
     def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
-        if checked:
-            assert checked[0] in output.getvalue()
+        assert output.getvalue() == ""
         checked.append(app.name)
         return CheckResult(app=app)
 
     monkeypatch.setattr(cli, "check_app", fake_check_app)
 
     assert main(["check", "--no-fetch"]) == 0
-    assert checked == ["one", "two"]
+    assert sorted(checked) == ["one", "two"]
+    lines = output.getvalue().splitlines()
+    assert [line.split("\t")[0] for line in lines] == ["one", "two"]
 
 
 def test_check_prints_rows_only_when_piped(
@@ -503,6 +552,28 @@ def test_check_unknown_app_is_an_error(
     assert "unknown app" in capsys.readouterr().err
 
 
+def test_check_reports_fetch_warnings_on_stderr(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app, fetch_error="could not resolve host")
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check"]) == 0
+
+    captured = capsys.readouterr()
+    assert "suite: warning: one: could not resolve host" in captured.err
+    assert "could not resolve host" not in captured.out
+
+
 def test_check_shows_prompt_project_status(
     config_file: Path,
     tty_output: None,
@@ -541,9 +612,35 @@ def test_check_shows_prompt_project_status(
 
     output = capsys.readouterr().out
     assert "PRJ" in output
-    assert "one  ✓" in output
-    assert "two  x" in output
+    assert _table_fields(output, "one")[1] == "✓"
+    assert _table_fields(output, "two")[1] == "x"
     assert projects_file.read_text(encoding="utf-8") == "one\t/tmp/one\t#111111\n"
+
+
+def test_check_separates_header_from_rows(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    header = next(index for index, line in enumerate(lines) if "APP" in line)
+    separator = lines[header + 1].strip()
+    assert separator
+    assert set(separator) == {"─"}
+    assert "one" in lines[header + 2]
 
 
 def test_check_shows_completion_status(
@@ -584,8 +681,8 @@ def test_check_shows_completion_status(
 
     output = capsys.readouterr().out
     assert "CMP" in output
-    assert "one  x    ✓" in output
-    assert "two  x    x" in output
+    assert _table_fields(output, "one")[2] == "✓"
+    assert _table_fields(output, "two")[2] == "x"
 
 
 def test_check_shows_dash_for_misc_completion(
@@ -617,8 +714,8 @@ def test_check_shows_dash_for_misc_completion(
     assert main(["check", "--no-fetch"]) == 0
 
     output = capsys.readouterr().out
-    assert "bin  x    -" in output
-    assert "one  x    ✓" in output
+    assert _table_fields(output, "bin")[2] == "-"
+    assert _table_fields(output, "one")[2] == "✓"
 
 
 def test_check_colors_the_status_columns(
@@ -684,9 +781,95 @@ def test_check_reports_commits_to_push(
     output = capsys.readouterr().out
     assert "TO PUSH" in output
     assert "2 commits" in output
-    assert "1 with commits to push" in output
-    assert "origin/main" in output
+    assert "with commits to push" not in output
+    assert "DETAIL" not in output
+    assert "origin/main" not in output
     assert "(2 ahead)" not in output
+
+
+def test_check_shows_detail_column_when_any_row_needs_it(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("gone", "tracked"):
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+    (tmp_path / "gone").rmdir()
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        if app.name == "tracked":
+            return CheckResult(app=app, upstream="origin/main", branch="main")
+        return CheckResult(app=app, state="missing")
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 1
+
+    output = capsys.readouterr().out
+    assert "DETAIL" in output
+    tracked = _table_fields(output, "tracked")
+    assert tracked == ["tracked", "x", "x", "clean", "up to date", "up to date"]
+    assert _table_fields(output, "gone")[6].startswith("missing: ")
+
+
+def test_check_shows_branch_when_there_is_no_upstream(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app, branch="main")
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    output = capsys.readouterr().out
+    assert _table_fields(output, "one")[6] == "main"
+
+
+def test_check_piped_output_omits_blank_detail_column(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "one").mkdir()
+    assert main(["add", "one", str(tmp_path / "one"), "--remote", "git@example.com:one.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app, upstream="origin/main", branch="main")
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "one\tx\tx\tclean\tup to date\tup to date",
+    ]
 
 
 def test_check_update_dot_project_adds_missing_projects(
@@ -727,8 +910,8 @@ def test_check_update_dot_project_adds_missing_projects(
 
     captured = capsys.readouterr()
     assert "Added 1 project to ~/.prompt-projects" in captured.out
-    assert "one  ✓" in captured.out
-    assert "two  ✓" in captured.out
+    assert _table_fields(captured.out, "one")[1] == "✓"
+    assert _table_fields(captured.out, "two")[1] == "✓"
     lines = projects_file.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "one\t/tmp/one\t#111111"
     assert lines[1].startswith(f"two\t{tmp_path / 'two'}\t#")

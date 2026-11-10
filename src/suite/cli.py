@@ -3,11 +3,15 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import click
 from click.shell_completion import shell_complete
+from rich import box
 from rich.console import Console
+from rich.measure import Measurement
+from rich.table import Table
 from rich.text import Text
 
 from . import __version__
@@ -21,12 +25,6 @@ from .prompt_projects import add_projects, load_projects
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 CHECK_HEADERS = ("APP", "PRJ", "CMP", "TO COMMIT", "TO PUSH", "TO PULL", "DETAIL")
-# Rows are printed as each app finishes, so status columns cannot be sized from
-# the full table. Size them for the longest static label and let unusually long
-# values push the detail column right.
-PROJECT_COLUMN_WIDTH = max(len(CHECK_HEADERS[1]), len("x"))
-COMPLETION_COLUMN_WIDTH = max(len(CHECK_HEADERS[2]), len("x"))
-STATUS_COLUMN_WIDTH = max(len(CHECK_HEADERS[3]), len("no upstream"))
 
 
 @click.group(context_settings=CONTEXT_SETTINGS, invoke_without_command=True)
@@ -189,69 +187,83 @@ def _cmd_check(
         )
 
     console = Console()
-    widths = _check_column_widths(apps)
     if tty:
-        console.print(
-            _format_check_row(CHECK_HEADERS, widths, ("bold",) * len(CHECK_HEADERS)),
-            soft_wrap=True,
-        )
+        with console.status("Checking apps…", spinner="dots"):
+            results = _check_all(apps, fetch=not no_fetch)
+    else:
+        results = _check_all(apps, fetch=not no_fetch)
+    results.sort(key=lambda result: _app_sort_key(result.app))
 
-    results: list[CheckResult] = []
-    for app in apps:
-        result = check_app(app, fetch=not no_fetch)
-        results.append(result)
-        listed = app.name in projects
-        has_completion = None if app.kind == "misc" else has_bash_completion(app.name)
-        row = _check_row(result, listed, has_completion)
-        if tty:
-            console.print(
-                _format_check_row(row, widths, _check_styles(result, listed, has_completion)),
-                soft_wrap=True,
-            )
-        else:
+    entries = [
+        (
+            result,
+            result.app.name in projects,
+            None if result.app.kind == "misc" else has_bash_completion(result.app.name),
+        )
+        for result in results
+    ]
+    rows = [
+        _check_row(result, listed, has_completion) for result, listed, has_completion in entries
+    ]
+    headers, rows = _visible_rows(rows)
+
+    if tty:
+        console.print(_check_table(entries, rows, headers, console), soft_wrap=True, crop=False)
+    else:
+        for row in rows:
             print("\t".join(row))
+
+    for result in results:
         if result.fetch_error:
             print(
                 f"suite: warning: {result.app.name}: {result.fetch_error}",
                 file=sys.stderr,
             )
 
-    if tty:
-        _print_check_summary(results)
     return 1 if any(result.has_problem for result in results) else 0
 
 
-def _check_column_widths(apps: Sequence[App]) -> tuple[int, int, int, int, int, int, int]:
-    name_width = max(len(CHECK_HEADERS[0]), *(len(app.name) for app in apps))
-    return (
-        name_width,
-        PROJECT_COLUMN_WIDTH,
-        COMPLETION_COLUMN_WIDTH,
-        STATUS_COLUMN_WIDTH,
-        STATUS_COLUMN_WIDTH,
-        STATUS_COLUMN_WIDTH,
-        0,
+def _check_all(apps: Sequence[App], *, fetch: bool) -> list[CheckResult]:
+    """Check every application concurrently, preserving the input order."""
+    if not apps:
+        return []
+    with ThreadPoolExecutor(max_workers=len(apps)) as pool:
+        return list(pool.map(lambda app: check_app(app, fetch=fetch), apps))
+
+
+def _visible_rows(
+    rows: Sequence[tuple[str, ...]],
+) -> tuple[tuple[str, ...], list[tuple[str, ...]]]:
+    """Drop the DETAIL column when no row has anything to put in it."""
+    if any(row[-1] for row in rows):
+        return CHECK_HEADERS, list(rows)
+    return CHECK_HEADERS[:-1], [row[:-1] for row in rows]
+
+
+def _check_table(
+    entries: Sequence[tuple[CheckResult, bool, bool | None]],
+    rows: Sequence[Sequence[str]],
+    headers: Sequence[str],
+    console: Console,
+) -> Table:
+    table = Table(
+        box=box.SIMPLE_HEAD,
+        pad_edge=False,
+        show_header=True,
+        show_edge=False,
+        header_style="bold",
+        expand=False,
     )
-
-
-def _print_check_summary(results: list[CheckResult]) -> None:
-    commit_count = sum(1 for result in results if result.state == "ok" and result.changes > 0)
-    pull_count = sum(1 for result in results if result.state == "ok" and result.behind > 0)
-    push_count = sum(1 for result in results if result.state == "ok" and result.ahead > 0)
-    problem_count = sum(1 for result in results if result.has_problem)
-
-    parts: list[str] = []
-    if commit_count:
-        parts.append(f"{commit_count} with changes to commit")
-    if pull_count:
-        parts.append(f"{pull_count} with commits to pull")
-    if push_count:
-        parts.append(f"{push_count} with commits to push")
-    if problem_count:
-        parts.append(f"{problem_count} with problems")
-    summary = ", ".join(parts) if parts else "nothing to do"
-    print()
-    print(f"{_plural(len(results), 'app')}: {summary}.")
+    for header in headers:
+        table.add_column(header, no_wrap=header == "DETAIL")
+    for (result, listed, has_completion), row in zip(entries, rows, strict=True):
+        styles = _check_styles(result, listed, has_completion)[: len(headers)]
+        table.add_row(*(Text(cell, style=style) for cell, style in zip(row, styles, strict=True)))
+    # Size the table from its contents and let long detail values overflow the
+    # terminal instead of wrapping, matching how the rows used to be printed.
+    options = console.options.update_width(10_000)
+    table.width = Measurement.get(console, options, table).maximum
+    return table
 
 
 def _check_row(
@@ -300,7 +312,7 @@ def _check_row(
         push = "up to date" if result.ahead == 0 else _plural(result.ahead, "commit")
         pull = "up to date" if result.behind == 0 else _plural(result.behind, "commit")
 
-    detail = result.upstream or result.branch or "detached HEAD"
+    detail = "" if result.upstream is not None else result.branch or "detached HEAD"
     return (name, project, completion, changes, push, pull, detail)
 
 
@@ -320,16 +332,6 @@ def _check_styles(
         push = "green" if result.ahead == 0 else "yellow"
         pull = "green" if result.behind == 0 else "yellow"
     return ("bold", project, completion, changes, push, pull, "dim")
-
-
-def _format_check_row(row: Sequence[str], widths: Sequence[int], styles: Sequence[str]) -> Text:
-    text = Text()
-    for index, (cell, width, style) in enumerate(zip(row, widths, styles, strict=True)):
-        if index:
-            text.append("  ")
-        text.append(cell, style=style)
-        text.append(" " * (width - len(cell)))
-    return text
 
 
 def _app_sort_key(app: App) -> str:
