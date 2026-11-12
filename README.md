@@ -76,7 +76,7 @@ apps:
 ```
 
 Paths in the config file may be absolute or start with `~` or an environment
-variable such as `$HOME` or `${HOME}`. `suite list` always prints absolute
+variable such as `$HOME` or `${HOME}`. `suite check` always prints absolute
 paths, while `suite add` stores paths under the home directory with `~` and all
 other paths as absolute paths.
 
@@ -100,8 +100,7 @@ install` first if you normally use `uv run suite`.
 | Command | Description |
 | --- | --- |
 | `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Scan applications for uncommitted changes, commits to pull, installed completions, and prompt project registration. |
-| `suite` | List configured applications and their local directories (same as `suite list`). |
-| `suite list` | List configured applications and their local directories. |
+| `suite` | Check every application (same as `suite check`). |
 | `suite add NAME PATH [--remote URL] [--description TEXT] [--misc]` | Add an application whose checkout already exists at `PATH`. |
 | `suite remove NAME` | Remove an application from the database. |
 | `suite config [--show]` | Print the config path, optionally with the file contents. |
@@ -117,26 +116,16 @@ suite check [APP ...] [--no-fetch] [--update-dot-project]
 - `--update-dot-project`: add missing applications to `~/.prompt-projects`
   before printing the table.
 
+Running `suite` without a command is the same as `suite check`.
+
 Applications are checked in parallel, one thread per application, then printed
 once every check has finished, in alphabetical order by name. On a terminal a
 spinner is shown while the checks run. When
 stdout is not a terminal, the header is omitted and the remaining columns are
 separated by a single tab, so each application is one line of tab-separated
-fields (for example `suite check | sort`, or `suite check | cut -f1,4-7`). When
-no row has a detail value, the DETAIL field is omitted and each line has six
-fields instead of seven.
-
-### `list`
-
-```text
-suite list
-```
-
-Prints the configured application name, local directory, and remote in
-alphabetical order by name. Running `suite` without a command does the same.
-The header row and `Config:` footer are only shown on a terminal; when piped
-(for example `suite | sort`), the output is one tab-separated line per
-application.
+fields (for example `suite check | sort`, or `suite check | cut -f1,5-8`). When
+no row has a detail value, the DETAIL field is omitted and each line has seven
+fields instead of eight.
 
 ### `add`
 
@@ -184,6 +173,9 @@ For every application, `suite check`:
 5. Checks whether the app has a bash completion script installed.
 6. Checks whether the application is registered in `~/.prompt-projects`.
 
+The **LOCAL DIR** column shows the absolute path to the application's local
+checkout.
+
 The **PRJ** column shows `✓` when the application is registered by name and `x`
 when it is missing. Pass `--update-dot-project` to append missing applications
 to `~/.prompt-projects` before the table is printed.
@@ -208,11 +200,11 @@ for neutral details. Colors are disabled automatically when output is not a
 terminal, along with the header.
 
 ```text
-APP     PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL
-cm      x    ✓    2 changes    1 commit     3 commits
-tether  ✓    x    clean        up to date   up to date
-prism   ✓    x    -            -            -             missing: /home/user/dev/prism
-bin     x    -    clean        up to date   up to date
+APP     LOCAL DIR             PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL
+cm      /home/user/dev/cm     x    ✓    2 changes    1 commit     3 commits
+tether  /home/user/dev/tether ✓    x    clean        up to date   up to date
+prism   /home/user/dev/prism  ✓    x    -            -            -             missing: /home/user/dev/prism
+bin     /home/user/bin        x    -    clean        up to date   up to date
 ```
 
 ### Exit codes

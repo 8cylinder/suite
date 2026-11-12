@@ -43,34 +43,43 @@ def _table_fields(output: str, name: str) -> list[str]:
 def test_first_run_creates_config(
     config_file: Path, tty_output: None, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    exit_code = main(["list"])
+    exit_code = main([])
 
     assert exit_code == 0
     assert config_file.is_file()
     captured = capsys.readouterr()
     assert "Created config:" in captured.err
     assert "No apps configured." in captured.out
-    assert "Config:" in captured.out
+    assert "Config:" not in captured.out
 
 
-def test_plain_invocation_lists_apps(
-    config_file: Path, tty_output: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_plain_invocation_runs_check(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     local_dir = tmp_path / "cm"
     local_dir.mkdir()
     assert main(["add", "cm", str(local_dir), "--remote", "git@example.com:cm.git"]) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
     capsys.readouterr()
 
     assert main([]) == 0
 
     output = capsys.readouterr().out
-    assert "NAME" in output
+    assert "APP" in output
     assert "cm" in output
     assert str(local_dir) in output
     assert "Usage: suite" not in output
 
 
-def test_list_prints_rows_only_when_piped(
+def test_plain_invocation_checks_when_piped(
     config_file: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -82,36 +91,41 @@ def test_list_prints_rows_only_when_piped(
             main(["add", name, str(tmp_path / name), "--remote", f"git@example.com:{name}.git"])
             == 0
         )
-    capsys.readouterr()
-    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
 
-    assert main(["list"]) == 0
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+    capsys.readouterr()
+
+    assert main([]) == 0
 
     output = capsys.readouterr().out
     lines = output.splitlines()
     assert lines == [
-        f"alpha\t{tmp_path / 'alpha'}\tgit@example.com:alpha.git",
-        f"zeta\t{tmp_path / 'zeta'}\tgit@example.com:zeta.git",
+        f"alpha\t{tmp_path / 'alpha'}\tx\tx\tclean\t-\tno upstream\tdetached HEAD",
+        f"zeta\t{tmp_path / 'zeta'}\tx\tx\tclean\t-\tno upstream\tdetached HEAD",
     ]
-    assert "NAME" not in output
+    assert "APP" not in output
     assert "Config:" not in output
 
 
-def test_list_no_apps_message_goes_to_stderr_when_piped(
+def test_no_apps_message_goes_to_stderr_when_piped(
     config_file: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
 
-    assert main(["list"]) == 0
+    assert main([]) == 0
 
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "No apps configured." in captured.err
 
 
-def test_add_list_remove(
+def test_add_remove(
     config_file: Path, tty_output: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     local_dir = tmp_path / "cm"
@@ -127,14 +141,9 @@ def test_add_list_remove(
         }
     ]
 
-    assert main(["list"]) == 0
-    listed = capsys.readouterr().out
-    assert "cm" in listed
-    assert str(local_dir) in listed
-
     assert main(["remove", "cm"]) == 0
     assert "Removed cm" in capsys.readouterr().out
-    assert main(["list"]) == 0
+    assert main([]) == 0
     assert "No apps configured." in capsys.readouterr().out
 
 
@@ -161,7 +170,7 @@ def test_add_stores_home_paths_with_tilde(
     assert "Added home-app -> ~/dev/cm" in capsys.readouterr().out
 
 
-def test_list_expands_home_paths_to_absolute(
+def test_check_expands_home_paths_to_absolute(
     config_file: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -184,11 +193,16 @@ apps:
         encoding="utf-8",
     )
 
-    assert main(["list"]) == 0
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+
+    assert main(["check", "--no-fetch"]) == 0
 
     output = capsys.readouterr().out
-    assert f"cm\t{home / 'dev' / 'cm'}\tgit@example.com:cm.git" in output
-    assert f"other\t{home / 'dev' / 'other'}\tgit@example.com:other.git" in output
+    assert f"cm\t{home / 'dev' / 'cm'}\t" in output
+    assert f"other\t{home / 'dev' / 'other'}\t" in output
     assert "~/" not in output
 
 
@@ -363,32 +377,6 @@ def test_check_reports_missing_app(
     assert "with problems" not in captured.out
 
 
-def test_list_sorts_apps_by_name(
-    config_file: Path, tty_output: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    for name in ("zeta", "alpha", "mu"):
-        (tmp_path / name).mkdir()
-        assert (
-            main(
-                [
-                    "add",
-                    name,
-                    str(tmp_path / name),
-                    "--remote",
-                    f"git@example.com:{name}.git",
-                ]
-            )
-            == 0
-        )
-    capsys.readouterr()
-
-    assert main(["list"]) == 0
-
-    lines = capsys.readouterr().out.splitlines()
-    names = [line.split()[0] for line in lines[1:] if line and not line.startswith("Config:")]
-    assert names == ["alpha", "mu", "zeta"]
-
-
 def test_check_sorts_apps_by_name(
     config_file: Path,
     tmp_path: Path,
@@ -515,7 +503,7 @@ def test_check_prints_rows_only_when_piped(
 
     captured = capsys.readouterr()
     assert captured.out.splitlines() == [
-        "one\tx\tx\tclean\t-\tno upstream\tdetached HEAD",
+        f"one\t{tmp_path / 'one'}\tx\tx\tclean\t-\tno upstream\tdetached HEAD",
     ]
     assert captured.err == ""
 
@@ -540,9 +528,9 @@ def test_check_piped_row_keeps_detail_in_last_field(
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 1
     fields = lines[0].split("\t")
-    assert len(fields) == 7
+    assert len(fields) == 8
     assert fields[0] == "missing-app"
-    assert fields[6] == f"missing: {local_dir}"
+    assert fields[7] == f"missing: {local_dir}"
 
 
 def test_check_unknown_app_is_an_error(
@@ -612,8 +600,8 @@ def test_check_shows_prompt_project_status(
 
     output = capsys.readouterr().out
     assert "PRJ" in output
-    assert _table_fields(output, "one")[1] == "✓"
-    assert _table_fields(output, "two")[1] == "x"
+    assert _table_fields(output, "one")[2] == "✓"
+    assert _table_fields(output, "two")[2] == "x"
     assert projects_file.read_text(encoding="utf-8") == "one\t/tmp/one\t#111111\n"
 
 
@@ -681,8 +669,8 @@ def test_check_shows_completion_status(
 
     output = capsys.readouterr().out
     assert "CMP" in output
-    assert _table_fields(output, "one")[2] == "✓"
-    assert _table_fields(output, "two")[2] == "x"
+    assert _table_fields(output, "one")[3] == "✓"
+    assert _table_fields(output, "two")[3] == "x"
 
 
 def test_check_shows_dash_for_misc_completion(
@@ -714,8 +702,8 @@ def test_check_shows_dash_for_misc_completion(
     assert main(["check", "--no-fetch"]) == 0
 
     output = capsys.readouterr().out
-    assert _table_fields(output, "bin")[2] == "-"
-    assert _table_fields(output, "one")[2] == "✓"
+    assert _table_fields(output, "bin")[3] == "-"
+    assert _table_fields(output, "one")[3] == "✓"
 
 
 def test_check_colors_the_status_columns(
@@ -823,8 +811,16 @@ def test_check_shows_detail_column_when_any_row_needs_it(
     output = capsys.readouterr().out
     assert "DETAIL" in output
     tracked = _table_fields(output, "tracked")
-    assert tracked == ["tracked", "x", "x", "clean", "up to date", "up to date"]
-    assert _table_fields(output, "gone")[6].startswith("missing: ")
+    assert tracked == [
+        "tracked",
+        str(tmp_path / "tracked"),
+        "x",
+        "x",
+        "clean",
+        "up to date",
+        "up to date",
+    ]
+    assert _table_fields(output, "gone")[7].startswith("missing: ")
 
 
 def test_check_shows_branch_when_there_is_no_upstream(
@@ -846,7 +842,7 @@ def test_check_shows_branch_when_there_is_no_upstream(
     assert main(["check", "--no-fetch"]) == 0
 
     output = capsys.readouterr().out
-    assert _table_fields(output, "one")[6] == "main"
+    assert _table_fields(output, "one")[7] == "main"
 
 
 def test_check_piped_output_omits_blank_detail_column(
@@ -868,7 +864,7 @@ def test_check_piped_output_omits_blank_detail_column(
     assert main(["check", "--no-fetch"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
-        "one\tx\tx\tclean\tup to date\tup to date",
+        f"one\t{tmp_path / 'one'}\tx\tx\tclean\tup to date\tup to date",
     ]
 
 
@@ -910,8 +906,8 @@ def test_check_update_dot_project_adds_missing_projects(
 
     captured = capsys.readouterr()
     assert "Added 1 project to ~/.prompt-projects" in captured.out
-    assert _table_fields(captured.out, "one")[1] == "✓"
-    assert _table_fields(captured.out, "two")[1] == "✓"
+    assert _table_fields(captured.out, "one")[2] == "✓"
+    assert _table_fields(captured.out, "two")[2] == "✓"
     lines = projects_file.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "one\t/tmp/one\t#111111"
     assert lines[1].startswith(f"two\t{tmp_path / 'two'}\t#")

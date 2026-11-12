@@ -24,7 +24,16 @@ from .prompt_projects import add_projects, load_projects
 
 CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
-CHECK_HEADERS = ("APP", "PRJ", "CMP", "TO COMMIT", "TO PUSH", "TO PULL", "DETAIL")
+CHECK_HEADERS = (
+    "APP",
+    "LOCAL DIR",
+    "PRJ",
+    "CMP",
+    "TO COMMIT",
+    "TO PUSH",
+    "TO PULL",
+    "DETAIL",
+)
 
 
 @click.group(context_settings=CONTEXT_SETTINGS, invoke_without_command=True)
@@ -39,7 +48,7 @@ def cli(ctx: click.Context, completions: bool) -> None:
         click.echo(f"Source it now: source {display_path(path)}")
         ctx.exit(0)
     if ctx.invoked_subcommand is None:
-        ctx.exit(_cmd_list(_load_config()))
+        ctx.exit(_cmd_check(_load_config(), []))
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS, help="show changes to commit and commits to pull")
@@ -65,12 +74,6 @@ def check(
     ctx.exit(
         _cmd_check(config, list(app), no_fetch=no_fetch, update_dot_project=update_dot_project)
     )
-
-
-@cli.command("list", context_settings=CONTEXT_SETTINGS, help="list configured applications")
-@click.pass_context
-def list_apps(ctx: click.Context) -> None:
-    ctx.exit(_cmd_list(_load_config()))
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS, help="add an application")
@@ -268,13 +271,15 @@ def _check_table(
 
 def _check_row(
     result: CheckResult, listed: bool, has_completion: bool | None
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, str]:
     name = result.app.name
+    local_dir = display_path(result.app.local_dir)
     project = "✓" if listed else "x"
     completion = "-" if has_completion is None else ("✓" if has_completion else "x")
     if result.state == "missing":
         return (
             name,
+            local_dir,
             project,
             completion,
             "-",
@@ -286,6 +291,7 @@ def _check_row(
         message = result.message or "not a git repository"
         return (
             name,
+            local_dir,
             project,
             completion,
             "-",
@@ -296,6 +302,7 @@ def _check_row(
     if result.state == "error":
         return (
             name,
+            local_dir,
             project,
             completion,
             "-",
@@ -313,16 +320,16 @@ def _check_row(
         pull = "up to date" if result.behind == 0 else _plural(result.behind, "commit")
 
     detail = "" if result.upstream is not None else result.branch or "detached HEAD"
-    return (name, project, completion, changes, push, pull, detail)
+    return (name, local_dir, project, completion, changes, push, pull, detail)
 
 
 def _check_styles(
     result: CheckResult, listed: bool, has_completion: bool | None
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, str]:
     project = "green" if listed else "red"
     completion = "dim" if has_completion is None else "green" if has_completion else "red"
     if result.state != "ok":
-        return ("bold red", project, completion, "dim", "dim", "dim", "red")
+        return ("bold red", "dim", project, completion, "dim", "dim", "dim", "red")
 
     changes = "green" if result.changes == 0 else "yellow"
     if result.upstream is None:
@@ -331,34 +338,11 @@ def _check_styles(
     else:
         push = "green" if result.ahead == 0 else "yellow"
         pull = "green" if result.behind == 0 else "yellow"
-    return ("bold", project, completion, changes, push, pull, "dim")
+    return ("bold", "dim", project, completion, changes, push, pull, "dim")
 
 
 def _app_sort_key(app: App) -> str:
     return app.name.casefold()
-
-
-def _cmd_list(config: Config) -> int:
-    tty = _stdout_is_tty()
-    if not config.apps:
-        print(
-            "No apps configured. Add one with `suite add NAME PATH`.",
-            file=sys.stdout if tty else sys.stderr,
-        )
-    else:
-        rows = [
-            (app.name, display_path(app.local_dir), app.remote or "-")
-            for app in sorted(config.apps, key=_app_sort_key)
-        ]
-        if tty:
-            _print_table(("NAME", "LOCAL DIR", "REMOTE"), rows)
-        else:
-            for row in rows:
-                print("\t".join(row))
-    if tty:
-        print()
-        print(f"Config: {display_path(config.path)} ({_plural(len(config.apps), 'app')})")
-    return 0
 
 
 def _cmd_add(
@@ -422,17 +406,6 @@ def _cmd_config(config: Config, show: bool) -> int:
         if not text.endswith("\n"):
             sys.stdout.write("\n")
     return 0
-
-
-def _print_table(headers: tuple[str, ...], rows: Sequence[tuple[str, ...]]) -> None:
-    widths = [max(len(row[index]) for row in (headers, *rows)) for index in range(len(headers))]
-    for row in (headers, *rows):
-        print(_format_row(row, widths))
-
-
-def _format_row(row: Sequence[str], widths: Sequence[int]) -> str:
-    line = "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True))
-    return line.rstrip()
 
 
 def _plural(count: int, singular: str, plural: str | None = None) -> str:
