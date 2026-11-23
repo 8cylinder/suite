@@ -4,7 +4,9 @@ version = "0.2.0"
 description = "Track the git status of every application in your suite."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "GPL-2.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Sheldon McGrandle" }]
 dependencies = [
     "click>=8.1",
     "platformdirs>=4.3",
@@ -14,6 +16,11 @@ dependencies = [
 
 [project.scripts]
 suite = "suite.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/8cylinder/suite"
+Repository = "https://github.com/8cylinder/suite"
+Issues = "https://github.com/8cylinder/suite/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -25,18 +32,38 @@ packages = ["src/suite"]
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "pytest-cov>=6",
     "ruff>=0.9",
+    "sphinx>=9",
+    "sphinx-click>=6",
+    "myst-parser",
     "types-pyyaml>=6.0",
     "ty>=0.0.1",
 ]
 
 [tool.ruff]
-line-length = 100
+line-length = 80
 target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+extend-select = ["ANN", "PGH003", "PYI"]
+
+[tool.ty.rules]
+dynamic-function-decorator-return = "error"
+missing-type-argument = "error"
+possibly-unresolved-reference = "warn"
+unsound-return-statement = "error"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config --cov=suite --cov-branch --cov-report=term-missing"
+
+[tool.coverage.run]
+branch = true
+source = ["suite"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true

@@ -68,7 +68,9 @@ def load_projects(path: Path | None = None) -> dict[str, PromptProject]:
         if not name:
             continue
         color = parts[2].strip() if len(parts) > 2 else ""
-        projects[name] = PromptProject(name=name, path=Path(parts[1]), color=color)
+        projects[name] = PromptProject(
+            name=name, path=Path(parts[1]), color=color
+        )
     return projects
 
 
@@ -85,7 +87,8 @@ def add_projects(apps: Sequence[App], path: Path | None = None) -> list[App]:
         if existing and not existing.endswith("\n"):
             existing += "\n"
         added = "".join(
-            f"{app.name}\t{app.local_dir}\t{_project_color(app.name)}\n" for app in missing
+            f"{app.name}\t{app.local_dir}\t{_project_color(app.name)}\n"
+            for app in missing
         )
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(existing + added, encoding="utf-8")

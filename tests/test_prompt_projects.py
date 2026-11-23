@@ -9,7 +9,8 @@ from suite.prompt_projects import add_projects, load_projects
 def test_load_projects_reads_tsv(tmp_path: Path) -> None:
     projects_file = tmp_path / ".prompt-projects"
     projects_file.write_text(
-        "# comment\n\none\t/tmp/one\t#abcdef\nwrong\n\t/tmp/no-name\t#ffffff\ntwo\t/tmp/two\n",
+        "# comment\n\none\t/tmp/one\t#abcdef\nwrong\n"
+        "\t/tmp/no-name\t#ffffff\ntwo\t/tmp/two\n",
         encoding="utf-8",
     )
 
@@ -46,7 +47,9 @@ def test_add_projects_appends_only_missing_apps(tmp_path: Path) -> None:
 def test_add_projects_creates_the_file(tmp_path: Path) -> None:
     projects_file = tmp_path / "nested" / ".prompt-projects"
 
-    added = add_projects([App(name="one", local_dir=Path("/tmp/one"))], projects_file)
+    added = add_projects(
+        [App(name="one", local_dir=Path("/tmp/one"))], projects_file
+    )
 
     assert [app.name for app in added] == ["one"]
     assert projects_file.is_file()

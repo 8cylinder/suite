@@ -68,7 +68,9 @@ def test_clean_up_to_date_repository(repositories: tuple[Path, Path]) -> None:
     assert result.upstream == "origin/main"
 
 
-def test_uncommitted_changes_are_counted(repositories: tuple[Path, Path]) -> None:
+def test_uncommitted_changes_are_counted(
+    repositories: tuple[Path, Path],
+) -> None:
     _, clone = repositories
     (clone / "file.txt").write_text("changed\n", encoding="utf-8")
     (clone / "untracked.txt").write_text("new\n", encoding="utf-8")
@@ -79,7 +81,9 @@ def test_uncommitted_changes_are_counted(repositories: tuple[Path, Path]) -> Non
     assert result.changes == 2
 
 
-def test_commits_to_pull_require_fetch(repositories: tuple[Path, Path], tmp_path: Path) -> None:
+def test_commits_to_pull_require_fetch(
+    repositories: tuple[Path, Path], tmp_path: Path
+) -> None:
     origin, clone = repositories
     other = tmp_path / "other"
     git(tmp_path, "clone", str(origin), str(other))
@@ -115,7 +119,9 @@ def test_remote_url_without_remotes(tmp_path: Path) -> None:
 
 
 def test_missing_directory(tmp_path: Path) -> None:
-    result = check_app(App(name="demo", local_dir=tmp_path / "nope"), fetch=False)
+    result = check_app(
+        App(name="demo", local_dir=tmp_path / "nope"), fetch=False
+    )
 
     assert result.state == "missing"
     assert result.has_problem

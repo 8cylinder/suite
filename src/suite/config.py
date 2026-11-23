@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+import tempfile
+import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,8 +15,8 @@ import yaml
 from .errors import SuiteError
 from .models import App, AppKind
 
-CONFIG_ENV = "SUITE_CONFIG"
-CONFIG_FILENAME = "config.yaml"
+CONFIG_FILENAME = "config.toml"
+LEGACY_FILENAME = "config.yaml"
 DEFAULT_APPS_ROOT = Path("~/dev")
 
 CONFIG_HEADER = """\
@@ -21,12 +24,8 @@ CONFIG_HEADER = """\
 # Edit local_dir values to point at each application's checkout.
 """
 
-
-class _ConfigDumper(yaml.SafeDumper):
-    """Keep sequences indented under their parent key."""
-
-    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
-        super().increase_indent(flow, False)
+_TOP_LEVEL_KEYS = frozenset({"apps_root", "apps"})
+_APP_KEYS = frozenset({"name", "local_dir", "remote", "description", "kind"})
 
 
 class ConfigError(SuiteError):
@@ -35,33 +34,52 @@ class ConfigError(SuiteError):
 
 @dataclass
 class Config:
-    """The suite database, stored as YAML."""
+    """The suite database, stored as TOML."""
 
     path: Path
     apps_root: Path
     apps: list[App] = field(default_factory=list)
     created: bool = False
+    migrated_from: Path | None = None
+    warnings: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
         """Load the config, creating an empty one on first run."""
-        config_path = config_path_from_env() if path is None else _expand_path(path)
-        if config_path.is_dir():
-            raise ConfigError(f"config path is a directory: {config_path}")
-        if not config_path.exists():
-            config = cls(path=config_path, apps_root=DEFAULT_APPS_ROOT.expanduser())
+        config_file = config_path() if path is None else _expand_path(path)
+        if config_file.is_dir():
+            raise ConfigError(f"config path is a directory: {config_file}")
+        if not config_file.exists():
+            legacy = config_file.with_name(LEGACY_FILENAME)
+            if legacy.is_file():
+                config = cls._from_yaml(legacy)
+                config.path = config_file
+                config.migrated_from = legacy
+                config.save()
+                return config
+            config = cls(
+                path=config_file,
+                apps_root=DEFAULT_APPS_ROOT.expanduser(),
+            )
             config.save()
             config.created = True
             return config
 
         try:
-            text = config_path.read_text(encoding="utf-8")
+            with config_file.open("rb") as handle:
+                data = tomllib.load(handle)
+        except tomllib.TOMLDecodeError as exc:
+            raise ConfigError(f"invalid TOML in {config_file}: {exc}") from exc
         except OSError as exc:
-            raise ConfigError(f"could not read {config_path}: {exc}") from exc
-        return cls._from_yaml(config_path, text)
+            raise ConfigError(f"could not read {config_file}: {exc}") from exc
+        return cls._from_mapping(config_file, data)
 
     @classmethod
-    def _from_yaml(cls, path: Path, text: str) -> Config:
+    def _from_yaml(cls, path: Path) -> Config:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"could not read {path}: {exc}") from exc
         try:
             data = yaml.safe_load(text)
         except yaml.YAMLError as exc:
@@ -70,14 +88,23 @@ class Config:
             raise ConfigError(f"config file is empty: {path}")
         if not isinstance(data, Mapping):
             raise ConfigError(f"config file must contain a mapping: {path}")
+        return cls._from_mapping(path, cast(Mapping[str, Any], data))
 
-        raw = cast(Mapping[str, Any], data)
+    @classmethod
+    def _from_mapping(cls, path: Path, data: Mapping[str, Any]) -> Config:
+        warnings = [
+            f"unknown configuration key {key!r} in {path}; ignoring"
+            for key in data
+            if key not in _TOP_LEVEL_KEYS
+        ]
         base = path.parent
-        apps_root_raw = raw.get("apps_root", str(DEFAULT_APPS_ROOT))
+        apps_root_raw = data.get("apps_root", str(DEFAULT_APPS_ROOT))
         if not isinstance(apps_root_raw, str) or not apps_root_raw.strip():
-            raise ConfigError(f"'apps_root' must be a non-empty string in {path}")
+            raise ConfigError(
+                f"'apps_root' must be a non-empty string in {path}"
+            )
 
-        apps_raw = raw.get("apps", [])
+        apps_raw = data.get("apps", [])
         if apps_raw is None:
             apps_raw = []
         if not isinstance(apps_raw, list):
@@ -91,17 +118,29 @@ class Config:
             entry = cast(Mapping[str, Any], item)
             name = entry.get("name")
             if not isinstance(name, str) or not name.strip():
-                raise ConfigError(f"app #{index} is missing a valid 'name' in {path}")
+                raise ConfigError(
+                    f"app #{index} is missing a valid 'name' in {path}"
+                )
             name = name.strip()
             if name in seen:
                 raise ConfigError(f"duplicate app name: {name!r} in {path}")
             seen.add(name)
+            warnings.extend(
+                f"unknown configuration key {key!r} for app {name!r} "
+                f"in {path}; ignoring"
+                for key in entry
+                if key not in _APP_KEYS
+            )
 
             local_dir_raw = entry.get("local_dir")
             if not isinstance(local_dir_raw, str) or not local_dir_raw.strip():
-                raise ConfigError(f"app {name!r} is missing a valid 'local_dir' in {path}")
+                raise ConfigError(
+                    f"app {name!r} is missing a valid 'local_dir' in {path}"
+                )
             remote = _optional_string(entry.get("remote"), "remote", name, path)
-            description = _optional_string(entry.get("description"), "description", name, path)
+            description = _optional_string(
+                entry.get("description"), "description", name, path
+            )
             kind = _parse_kind(entry.get("kind"), name, path)
             apps.append(
                 App(
@@ -112,26 +151,31 @@ class Config:
                     kind=kind,
                 )
             )
-        return cls(path=path, apps_root=_resolve_path(apps_root_raw, base), apps=apps)
+        return cls(
+            path=path,
+            apps_root=_resolve_path(apps_root_raw, base),
+            apps=apps,
+            warnings=warnings,
+        )
 
     def save(self) -> None:
-        data = {
-            "apps_root": stored_path(self.apps_root),
-            "apps": [_app_to_mapping(app) for app in self.apps],
-        }
+        text = _render(self)
         try:
-            text = CONFIG_HEADER + yaml.dump(
-                data,
-                Dumper=_ConfigDumper,
-                sort_keys=False,
-                default_flow_style=False,
-                allow_unicode=True,
-                width=1000,
-            )
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_name(self.path.name + ".tmp")
-            temporary.write_text(text, encoding="utf-8")
-            temporary.replace(self.path)
+            descriptor, name = tempfile.mkstemp(
+                dir=self.path.parent,
+                prefix=f".{self.path.name}.",
+                text=True,
+            )
+            try:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                Path(name).replace(self.path)
+            except BaseException:
+                Path(name).unlink(missing_ok=True)
+                raise
         except OSError as exc:
             raise ConfigError(f"could not write {self.path}: {exc}") from exc
 
@@ -142,7 +186,9 @@ class Config:
         existing = self.find(app.name)
         if existing is not None:
             if not overwrite:
-                raise ConfigError(f"app {app.name!r} already exists in {self.path}")
+                raise ConfigError(
+                    f"app {app.name!r} already exists in {self.path}"
+                )
             self.apps[self.apps.index(existing)] = app
             return
         self.apps.append(app)
@@ -155,12 +201,10 @@ class Config:
         return app
 
 
-def config_path_from_env() -> Path:
-    override = os.environ.get(CONFIG_ENV)
-    if override:
-        return _expand_path(override)
+def config_path() -> Path:
+    """Return the platform config file path."""
     directory = platformdirs.user_config_dir("suite", appauthor=False)
-    return Path(directory) / CONFIG_FILENAME
+    return (Path(directory) / CONFIG_FILENAME).expanduser().absolute()
 
 
 def display_path(path: Path) -> str:
@@ -169,7 +213,7 @@ def display_path(path: Path) -> str:
 
 
 def stored_path(path: Path) -> str:
-    """Render a path for the config, abbreviating the home directory to ``~``."""
+    """Render a path for the config, abbreviating the home directory."""
     expanded = path.expanduser()
     try:
         relative = expanded.relative_to(Path.home())
@@ -185,6 +229,27 @@ def absolute_path(path: Path, *, base: Path | None = None) -> Path:
     return ((base if base is not None else Path.cwd()) / expanded).resolve()
 
 
+def _render(config: Config) -> str:
+    lines: list[str] = [str(line) for line in CONFIG_HEADER.splitlines()]
+    lines.append(f"apps_root = {_toml_string(stored_path(config.apps_root))}")
+    for app in config.apps:
+        lines.append("")
+        lines.append("[[apps]]")
+        lines.append(f"name = {_toml_string(app.name)}")
+        lines.append(f"local_dir = {_toml_string(stored_path(app.local_dir))}")
+        if app.remote:
+            lines.append(f"remote = {_toml_string(app.remote)}")
+        if app.description:
+            lines.append(f"description = {_toml_string(app.description)}")
+        if app.kind == "misc":
+            lines.append('kind = "misc"')
+    return "\n".join(lines) + "\n"
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 def _resolve_path(value: str, base: Path) -> Path:
     path = _expand_path(value)
     if not path.is_absolute():
@@ -197,24 +262,17 @@ def _expand_path(value: str | Path) -> Path:
     return Path(os.path.expandvars(value)).expanduser()
 
 
-def _optional_string(value: object, field_name: str, app_name: str, path: Path) -> str | None:
+def _optional_string(
+    value: object, field_name: str, app_name: str, path: Path
+) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ConfigError(f"app {app_name!r} has an invalid '{field_name}' in {path}")
+        raise ConfigError(
+            f"app {app_name!r} has an invalid '{field_name}' in {path}"
+        )
     value = value.strip()
     return value or None
-
-
-def _app_to_mapping(app: App) -> dict[str, str]:
-    mapping = {"name": app.name, "local_dir": stored_path(app.local_dir)}
-    if app.remote:
-        mapping["remote"] = app.remote
-    if app.description:
-        mapping["description"] = app.description
-    if app.kind == "misc":
-        mapping["kind"] = app.kind
-    return mapping
 
 
 def _parse_kind(value: object, app_name: str, path: Path) -> AppKind:

@@ -2,27 +2,33 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from importlib.metadata import version as package_version
 from pathlib import Path
+from typing import Any
 
 import click
-from click.shell_completion import shell_complete
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.measure import Measurement
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__
 from .completions import has_bash_completion, install_bash_completion
-from .config import Config, absolute_path, display_path, stored_path
+from .config import (
+    Config,
+    absolute_path,
+    config_path,
+    display_path,
+    stored_path,
+)
 from .errors import SuiteError
 from .git import check_app, get_remote_url
 from .models import App, CheckResult
 from .prompt_projects import add_projects, load_projects
-
-CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
 
 CHECK_HEADERS = (
     "APP",
@@ -36,22 +42,87 @@ CHECK_HEADERS = (
 )
 
 
-@click.group(context_settings=CONTEXT_SETTINGS, invoke_without_command=True)
-@click.version_option(__version__, prog_name="suite", message="suite %(version)s")
-@click.option("--completions", is_flag=True, help="install the bash completion script and exit")
+@dataclass
+class AppContext:
+    """Global options shared by every command."""
+
+    color: str = "auto"
+    config: Config | None = None
+
+
+class _HelpOptions:
+    """Give every command the same ``-h`` and ``--help`` options."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
+        context_settings = dict(kwargs.pop("context_settings", {}) or {})
+        context_settings.setdefault("help_option_names", ["-h", "--help"])
+        super().__init__(
+            *args,
+            context_settings=context_settings,  # ty: ignore[unknown-argument]
+            **kwargs,
+        )
+
+
+class AppCommand(_HelpOptions, click.Command):
+    """A leaf command with the app's standard help options."""
+
+
+class AppGroup(_HelpOptions, click.Group):
+    """A command group that propagates the standard command classes."""
+
+    def command(  # ty: ignore[invalid-method-override]
+        self,
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
+    ) -> Callable[[Callable[..., object]], click.Command] | click.Command:
+        kwargs.setdefault("cls", AppCommand)
+        return super().command(*args, **kwargs)
+
+    def group(  # ty: ignore[invalid-method-override]
+        self,
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
+    ) -> Callable[[Callable[..., object]], click.Group] | click.Group:
+        kwargs.setdefault("cls", AppGroup)
+        return super().group(*args, **kwargs)
+
+
+@click.group(cls=AppGroup, invoke_without_command=True)
+@click.version_option(package_name="suite-cli", prog_name="suite")
+@click.option(
+    "--completions",
+    is_flag=True,
+    is_eager=True,
+    expose_value=False,
+    callback=lambda ctx, param, value: _completions_callback(ctx, param, value),
+    help="Write bash completions and exit.",
+)
+@click.option(
+    "--config",
+    "print_config",
+    is_flag=True,
+    is_eager=True,
+    expose_value=False,
+    callback=lambda ctx, param, value: _config_callback(ctx, param, value),
+    help="Print the config file path and exit.",
+)
+@click.option(
+    "--color",
+    type=click.Choice(["auto", "always", "never"], case_sensitive=False),
+    default="auto",
+    show_default=True,
+    help="Control colored output.",
+)
 @click.pass_context
-def cli(ctx: click.Context, completions: bool) -> None:
+def cli(ctx: click.Context, color: str) -> None:
     """Track the git status of every application in your suite."""
-    if completions:
-        path = install_bash_completion()
-        click.echo(f"Completion script: {display_path(path)}")
-        click.echo(f"Source it now: source {display_path(path)}")
-        ctx.exit(0)
+    ctx.obj = AppContext(color=color.lower())
+    ctx.color = _resolve_force(ctx.obj.color)
     if ctx.invoked_subcommand is None:
-        ctx.exit(_cmd_check(_load_config(), []))
+        ctx.exit(_cmd_check(ctx, _load_config(ctx), []))
 
 
-@cli.command(context_settings=CONTEXT_SETTINGS, help="show changes to commit and commits to pull")
+@cli.command(help="show changes to commit and commits to pull")
 @click.argument("app", nargs=-1, help="only check these applications")
 @click.option(
     "--no-fetch",
@@ -70,13 +141,19 @@ def check(
     no_fetch: bool,
     update_dot_project: bool,
 ) -> None:
-    config = _load_config()
+    """Show changes to commit and commits to pull."""
     ctx.exit(
-        _cmd_check(config, list(app), no_fetch=no_fetch, update_dot_project=update_dot_project)
+        _cmd_check(
+            ctx,
+            _load_config(ctx),
+            list(app),
+            no_fetch=no_fetch,
+            update_dot_project=update_dot_project,
+        )
     )
 
 
-@cli.command(context_settings=CONTEXT_SETTINGS, help="add an application")
+@cli.command(help="add an application")
 @click.argument("name", help="application name")
 @click.argument(
     "path",
@@ -99,30 +176,23 @@ def add(
     description: str | None,
     misc: bool,
 ) -> None:
-    ctx.exit(_cmd_add(_load_config(), name, path, remote, description, misc))
+    """Add an application to the database."""
+    ctx.exit(
+        _cmd_add(ctx, _load_config(ctx), name, path, remote, description, misc)
+    )
 
 
-@cli.command(context_settings=CONTEXT_SETTINGS, help="remove an application")
+@cli.command(help="remove an application")
 @click.argument("name", help="application name")
 @click.pass_context
 def remove(ctx: click.Context, name: str) -> None:
-    ctx.exit(_cmd_remove(_load_config(), name))
-
-
-@cli.command(context_settings=CONTEXT_SETTINGS, help="show the config file location")
-@click.option("--show", is_flag=True, help="also print the config file")
-@click.pass_context
-def config(ctx: click.Context, show: bool) -> None:
-    ctx.exit(_cmd_config(_load_config(), show))
+    """Remove an application from the database."""
+    ctx.exit(_cmd_remove(ctx, _load_config(ctx), name))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI, returning an exit code instead of raising."""
     args = list(sys.argv[1:] if argv is None else argv)
-    complete_var = "_SUITE_COMPLETE"
-    instruction = os.environ.get(complete_var)
-    if instruction is not None:
-        return shell_complete(cli, {}, "suite", complete_var, instruction)
     try:
         with cli.make_context("suite", args) as ctx:
             cli.invoke(ctx)
@@ -133,28 +203,123 @@ def main(argv: Sequence[str] | None = None) -> int:
         exc.show()
         return exc.exit_code
     except SuiteError as exc:
-        click.echo(f"suite: error: {exc}", err=True)
+        _, err = _consoles(_color_mode_from_args(args))
+        err.print(f"[red]error:[/red] {escape(str(exc))}", soft_wrap=True)
         return 2
     except (click.Abort, KeyboardInterrupt):
         return 1
 
 
-def _load_config() -> Config:
+def _completions_callback(
+    ctx: click.Context,
+    _param: click.Parameter,
+    value: bool,
+) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+    install_bash_completion(
+        ctx.command,
+        ctx.info_name or "suite",
+        package_version("suite-cli"),
+    )
+    ctx.exit()
+
+
+def _config_callback(
+    ctx: click.Context,
+    _param: click.Parameter,
+    value: bool,
+) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+    click.echo(config_path())
+    ctx.exit()
+
+
+def _load_config(ctx: click.Context) -> Config:
+    if isinstance(ctx.obj, AppContext) and ctx.obj.config is not None:
+        return ctx.obj.config
     config = Config.load()
+    _, err = _consoles(_context_color(ctx))
     if config.created:
-        click.echo(f"Created config: {display_path(config.path)}", err=True)
+        err.print(
+            f"[dim]Created config:[/dim] {escape(display_path(config.path))}"
+        )
+    if config.migrated_from is not None:
+        err.print(
+            "[yellow]warning:[/yellow] migrated "
+            f"{escape(display_path(config.migrated_from))} to "
+            f"{escape(display_path(config.path))}",
+            soft_wrap=True,
+        )
+    for warning in config.warnings:
+        err.print(
+            f"[yellow]warning:[/yellow] {escape(warning)}",
+            soft_wrap=True,
+        )
+    if isinstance(ctx.obj, AppContext):
+        ctx.obj.config = config
     return config
+
+
+def _context_color(ctx: click.Context) -> str:
+    if isinstance(ctx.obj, AppContext):
+        return ctx.obj.color
+    return "auto"
+
+
+def _resolve_force(mode: str) -> bool | None:
+    """Resolve a color mode, honoring the environment for auto."""
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    force_color = os.environ.get("FORCE_COLOR")
+    if force_color and force_color != "0":
+        return True
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("TERM") == "dumb":
+        return False
+    return None
+
+
+def _consoles(mode: str) -> tuple[Console, Console]:
+    force = _resolve_force(mode)
+    options: dict[str, Any] = {}
+    if force is True:
+        options["force_terminal"] = True
+    elif force is False:
+        options["force_terminal"] = False
+        options["no_color"] = True
+    return Console(**options), Console(stderr=True, **options)
+
+
+def _consoles_for(
+    ctx: click.Context,
+) -> tuple[Console, Console]:
+    return _consoles(_context_color(ctx))
+
+
+def _color_mode_from_args(args: Sequence[str]) -> str:
+    for index, arg in enumerate(args):
+        if arg == "--color" and index + 1 < len(args):
+            return args[index + 1].lower()
+        if arg.startswith("--color="):
+            return arg.split("=", 1)[1].lower()
+    return "auto"
 
 
 def _stdout_is_tty() -> bool:
     """Report whether stdout is a terminal, where table chrome makes sense."""
     try:
-        return sys.stdout.isatty()
+        return bool(sys.stdout.isatty())
     except (AttributeError, ValueError):
         return False
 
 
 def _cmd_check(
+    ctx: click.Context,
     config: Config,
     names: list[str],
     *,
@@ -171,12 +336,14 @@ def _cmd_check(
         apps = config.apps
     apps = sorted(apps, key=_app_sort_key)
 
+    out, err = _consoles_for(ctx)
     tty = _stdout_is_tty()
     if not apps:
-        print(
-            "No apps configured. Add one with `suite add NAME PATH`.",
-            file=sys.stdout if tty else sys.stderr,
-        )
+        message = "No apps configured. Add one with `suite add NAME PATH`."
+        if tty:
+            out.print(message)
+        else:
+            err.print(message)
         return 0
 
     projects = set(load_projects())
@@ -184,14 +351,16 @@ def _cmd_check(
     if update_dot_project and missing:
         added = add_projects(missing)
         projects.update(app.name for app in added)
-        print(
-            f"Added {_plural(len(added), 'project')} to ~/.prompt-projects",
-            file=sys.stdout if tty else sys.stderr,
+        message = (
+            f"Added {_plural(len(added), 'project')} to ~/.prompt-projects"
         )
+        if tty:
+            out.print(message)
+        else:
+            err.print(message)
 
-    console = Console()
     if tty:
-        with console.status("Checking apps…", spinner="dots"):
+        with out.status("Checking apps…", spinner="dots"):
             results = _check_all(apps, fetch=not no_fetch)
     else:
         results = _check_all(apps, fetch=not no_fetch)
@@ -201,26 +370,35 @@ def _cmd_check(
         (
             result,
             result.app.name in projects,
-            None if result.app.kind == "misc" else has_bash_completion(result.app.name),
+            None
+            if result.app.kind == "misc"
+            else has_bash_completion(result.app.name),
         )
         for result in results
     ]
     rows = [
-        _check_row(result, listed, has_completion) for result, listed, has_completion in entries
+        _check_row(result, listed, has_completion)
+        for result, listed, has_completion in entries
     ]
     headers, rows = _visible_rows(rows)
 
     if tty:
-        console.print(_check_table(entries, rows, headers, console), soft_wrap=True, crop=False)
+        out.print(
+            _check_table(entries, rows, headers, out),
+            soft_wrap=True,
+            crop=False,
+        )
     else:
         for row in rows:
-            print("\t".join(row))
+            click.echo("\t".join(row))
 
     for result in results:
         if result.fetch_error:
-            print(
-                f"suite: warning: {result.app.name}: {result.fetch_error}",
-                file=sys.stderr,
+            err.print(
+                "[yellow]warning:[/yellow] "
+                f"{escape(result.app.name)}: "
+                f"{escape(result.fetch_error)}",
+                soft_wrap=True,
             )
 
     return 1 if any(result.has_problem for result in results) else 0
@@ -259,11 +437,18 @@ def _check_table(
     )
     for header in headers:
         table.add_column(header, no_wrap=header == "DETAIL")
-    for (result, listed, has_completion), row in zip(entries, rows, strict=True):
+    for (result, listed, has_completion), row in zip(
+        entries, rows, strict=True
+    ):
         styles = _check_styles(result, listed, has_completion)[: len(headers)]
-        table.add_row(*(Text(cell, style=style) for cell, style in zip(row, styles, strict=True)))
-    # Size the table from its contents and let long detail values overflow the
-    # terminal instead of wrapping, matching how the rows used to be printed.
+        table.add_row(
+            *(
+                Text(cell, style=style)
+                for cell, style in zip(row, styles, strict=True)
+            )
+        )
+    # Size the table from its contents and let long detail values overflow
+    # the terminal instead of wrapping, matching how rows used to print.
     options = console.options.update_width(10_000)
     table.width = Measurement.get(console, options, table).maximum
     return table
@@ -275,7 +460,9 @@ def _check_row(
     name = result.app.name
     local_dir = display_path(result.app.local_dir)
     project = "✓" if listed else "x"
-    completion = "-" if has_completion is None else ("✓" if has_completion else "x")
+    completion = (
+        "-" if has_completion is None else ("✓" if has_completion else "x")
+    )
     if result.state == "missing":
         return (
             name,
@@ -311,15 +498,27 @@ def _check_row(
             f"error: {result.message or 'unknown error'}",
         )
 
-    changes = "clean" if result.changes == 0 else _plural(result.changes, "change")
+    changes = (
+        "clean" if result.changes == 0 else _plural(result.changes, "change")
+    )
     if result.upstream is None:
         push = "-"
         pull = "no upstream"
     else:
-        push = "up to date" if result.ahead == 0 else _plural(result.ahead, "commit")
-        pull = "up to date" if result.behind == 0 else _plural(result.behind, "commit")
+        push = (
+            "up to date"
+            if result.ahead == 0
+            else _plural(result.ahead, "commit")
+        )
+        pull = (
+            "up to date"
+            if result.behind == 0
+            else _plural(result.behind, "commit")
+        )
 
-    detail = "" if result.upstream is not None else result.branch or "detached HEAD"
+    detail = (
+        "" if result.upstream is not None else result.branch or "detached HEAD"
+    )
     return (name, local_dir, project, completion, changes, push, pull, detail)
 
 
@@ -327,9 +526,24 @@ def _check_styles(
     result: CheckResult, listed: bool, has_completion: bool | None
 ) -> tuple[str, str, str, str, str, str, str, str]:
     project = "green" if listed else "red"
-    completion = "dim" if has_completion is None else "green" if has_completion else "red"
+    completion = (
+        "dim"
+        if has_completion is None
+        else "green"
+        if has_completion
+        else "red"
+    )
     if result.state != "ok":
-        return ("bold red", "dim", project, completion, "dim", "dim", "dim", "red")
+        return (
+            "bold red",
+            "dim",
+            project,
+            completion,
+            "dim",
+            "dim",
+            "dim",
+            "red",
+        )
 
     changes = "green" if result.changes == 0 else "yellow"
     if result.upstream is None:
@@ -338,7 +552,16 @@ def _check_styles(
     else:
         push = "green" if result.ahead == 0 else "yellow"
         pull = "green" if result.behind == 0 else "yellow"
-    return ("bold", "dim", project, completion, changes, push, pull, "dim")
+    return (
+        "bold",
+        "dim",
+        project,
+        completion,
+        changes,
+        push,
+        pull,
+        "dim",
+    )
 
 
 def _app_sort_key(app: App) -> str:
@@ -346,6 +569,7 @@ def _app_sort_key(app: App) -> str:
 
 
 def _cmd_add(
+    ctx: click.Context,
     config: Config,
     name: str,
     path: Path,
@@ -353,13 +577,16 @@ def _cmd_add(
     description: str | None,
     misc: bool,
 ) -> int:
+    out, _ = _consoles_for(ctx)
     name = name.strip()
     if not name:
         raise SuiteError("application name cannot be empty")
 
     local_dir = absolute_path(path)
     if not local_dir.is_dir():
-        raise SuiteError(f"path is not an existing directory: {display_path(local_dir)}")
+        raise SuiteError(
+            f"path is not an existing directory: {display_path(local_dir)}"
+        )
 
     remote = (remote or "").strip() or get_remote_url(local_dir)
     if remote is None:
@@ -376,35 +603,26 @@ def _cmd_add(
     if existing is not None and not click.confirm(
         f"App {app.name!r} already exists. Overwrite?", default=False
     ):
-        print(f"Kept existing {app.name}.")
+        out.print(f"[yellow]Kept existing[/yellow] {escape(app.name)}.")
         return 0
 
     config.add_app(app, overwrite=existing is not None)
     config.save()
 
     action = "Updated" if existing is not None else "Added"
-    print(f"{action} {app.name} -> {stored_path(app.local_dir)}")
+    out.print(
+        f"{action} {escape(app.name)} -> {escape(stored_path(app.local_dir))}"
+    )
     return 0
 
 
-def _cmd_remove(config: Config, name: str) -> int:
+def _cmd_remove(ctx: click.Context, config: Config, name: str) -> int:
+    out, _ = _consoles_for(ctx)
     app = config.remove_app(name.strip())
     config.save()
-    print(f"Removed {app.name} ({stored_path(app.local_dir)})")
-    return 0
-
-
-def _cmd_config(config: Config, show: bool) -> int:
-    print(display_path(config.path))
-    if show:
-        try:
-            text = config.path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise SuiteError(f"could not read {config.path}: {exc}") from exc
-        print()
-        sys.stdout.write(text)
-        if not text.endswith("\n"):
-            sys.stdout.write("\n")
+    out.print(
+        f"Removed {escape(app.name)} ({escape(stored_path(app.local_dir))})"
+    )
     return 0
 
 
