@@ -102,7 +102,7 @@ spinner is shown while the checks run. When stdout is not a terminal, the
 header is omitted and the remaining columns are separated by a single tab, so
 each application is one line of tab-separated fields (for example
 `suite check | sort`, or `suite check | cut -f1,5-8`). When no row has a detail
-value, the DETAIL field is omitted and each line has seven fields instead of
+value, the Detail field is omitted and each line has seven fields instead of
 eight.
 
 For every application, `suite check`:
@@ -116,7 +116,7 @@ For every application, `suite check`:
 5. Checks whether the app has a bash completion script installed.
 6. Checks whether the application is registered in `~/.prompt-projects`.
 
-The **LOCAL DIR** column shows the absolute path to the application's local
+The **Local dir** column shows the absolute path to the application's local
 checkout.
 
 The **PRJ** column shows `✓` when the application is registered by name and
@@ -131,7 +131,7 @@ set), and `x` when it is missing. Install completions with
 apply to them. A missing script is informational: it does not affect `check`'s
 exit code.
 
-The **DETAIL** column stays blank for applications that track an upstream
+The **Detail** column stays blank for applications that track an upstream
 branch. It shows the local branch when there is no upstream, `detached HEAD`
 when the checkout is detached, and the reason an application is missing, is
 not a git repository, or could not be inspected. When every row is blank the
@@ -140,15 +140,15 @@ column is omitted entirely.
 The table is colorized with [Rich](https://github.com/Textualize/rich): green
 for clean or up-to-date values, yellow for changes or commits to pull/push,
 red for unregistered projects, missing completions, and application problems,
-and dim for neutral details. Colors are disabled automatically when output is
-not a terminal, along with the header.
+and dim for neutral details. The rule below the headers is 50% grey. Colors are
+disabled automatically when output is not a terminal, along with the header.
 
 ```text
-APP     LOCAL DIR             PRJ  CMP  TO COMMIT    TO PUSH      TO PULL      DETAIL
-cm      /home/user/dev/cm     x    ✓    2 changes    1 commit     3 commits
-tether  /home/user/dev/tether ✓    x    clean        up to date   up to date
-prism   /home/user/dev/prism  ✓    x    -            -            -             missing: /home/user/dev/prism
-bin     /home/user/bin        x    -    clean        up to date   up to date
+App     Local dir              PRJ  CMP  To commit    To push      To pull      Detail
+cm      /home/user/dev/cm      x    ✓    2 changes    1 commit     3 commits
+tether  /home/user/dev/tether  ✓    x    clean        up to date   up to date
+prism   /home/user/dev/prism   ✓    x    -            -            -            missing: /home/user/dev/prism
+bin     /home/user/bin         x    -    clean        up to date   up to date
 ```
 
 ### `add`

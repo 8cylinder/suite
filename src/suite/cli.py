@@ -31,14 +31,14 @@ from .models import App, CheckResult
 from .prompt_projects import add_projects, load_projects
 
 CHECK_HEADERS = (
-    "APP",
-    "LOCAL DIR",
+    "App",
+    "Local dir",
     "PRJ",
     "CMP",
-    "TO COMMIT",
-    "TO PUSH",
-    "TO PULL",
-    "DETAIL",
+    "To commit",
+    "To push",
+    "To pull",
+    "Detail",
 )
 
 
@@ -408,7 +408,7 @@ def _check_all(apps: Sequence[App], *, fetch: bool) -> list[CheckResult]:
 def _visible_rows(
     rows: Sequence[tuple[str, ...]],
 ) -> tuple[tuple[str, ...], list[tuple[str, ...]]]:
-    """Drop the DETAIL column when no row has anything to put in it."""
+    """Drop the Detail column when no row has anything to put in it."""
     if any(row[-1] for row in rows):
         return CHECK_HEADERS, list(rows)
     return CHECK_HEADERS[:-1], [row[:-1] for row in rows]
@@ -422,6 +422,7 @@ def _check_table(
 ) -> Table:
     table = Table(
         box=box.SIMPLE_HEAD,
+        border_style="bright_black",
         pad_edge=False,
         show_header=True,
         show_edge=False,
@@ -429,7 +430,7 @@ def _check_table(
         expand=False,
     )
     for header in headers:
-        table.add_column(header, no_wrap=header == "DETAIL")
+        table.add_column(header, no_wrap=header == "Detail")
     for (result, listed, has_completion), row in zip(
         entries, rows, strict=True
     ):

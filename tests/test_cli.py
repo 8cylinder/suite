@@ -83,7 +83,7 @@ def test_plain_invocation_runs_check(
     assert main([]) == 0
 
     output = capsys.readouterr().out
-    assert "APP" in output
+    assert "App" in output
     assert "cm" in output
     assert str(local_dir) in output
     assert "Usage: suite" not in output
@@ -127,7 +127,7 @@ def test_plain_invocation_checks_when_piped(
         f"{alpha}\t-\tno upstream\tdetached HEAD",
         f"{zeta}\t-\tno upstream\tdetached HEAD",
     ]
-    assert "APP" not in output
+    assert "App" not in output
     assert "Config:" not in output
 
 
@@ -777,7 +777,7 @@ def test_check_separates_header_from_rows(
     assert main(["check", "--no-fetch"]) == 0
 
     lines = capsys.readouterr().out.splitlines()
-    header = next(index for index, line in enumerate(lines) if "APP" in line)
+    header = next(index for index, line in enumerate(lines) if "App" in line)
     separator = lines[header + 1].strip()
     assert separator
     assert set(separator) == {"─"}
@@ -910,6 +910,8 @@ def test_check_colors_the_status_columns(
     assert "\x1b[32m✓" in output
     assert "\x1b[33m1 change" in output
     assert "\x1b[33m2 commits" in output
+    separator = next(line for line in output.splitlines() if "─" in line)
+    assert "\x1b[90m" in separator
 
 
 def test_check_reports_commits_to_push(
@@ -947,10 +949,10 @@ def test_check_reports_commits_to_push(
     assert main(["check", "--no-fetch"]) == 0
 
     output = capsys.readouterr().out
-    assert "TO PUSH" in output
+    assert "To push" in output
     assert "2 commits" in output
     assert "with commits to push" not in output
-    assert "DETAIL" not in output
+    assert "Detail" not in output
     assert "origin/main" not in output
     assert "(2 ahead)" not in output
 
@@ -989,7 +991,7 @@ def test_check_shows_detail_column_when_any_row_needs_it(
     assert main(["check", "--no-fetch"]) == 1
 
     output = capsys.readouterr().out
-    assert "DETAIL" in output
+    assert "Detail" in output
     tracked = _table_fields(output, "tracked")
     assert tracked == [
         "tracked",
