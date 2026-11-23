@@ -31,7 +31,7 @@ def test_first_run_creates_an_empty_config(tmp_path: Path) -> None:
 
     data = _read(config_file)
     assert data["apps_root"] == "~/dev"
-    assert "apps" not in data
+    assert "app" not in data
 
     reloaded = Config.load(config_file)
     assert reloaded.created is False
@@ -42,12 +42,12 @@ def test_load_reads_app_kind(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """\
-[[apps]]
+[[app]]
 name = "bin"
 local_dir = "/tmp/bin"
 kind = "misc"
 
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "/tmp/cm"
 """,
@@ -64,7 +64,7 @@ def test_load_rejects_an_invalid_kind(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """\
-[[apps]]
+[[app]]
 name = "bin"
 local_dir = "/tmp/bin"
 kind = "collection"
@@ -83,7 +83,7 @@ def test_save_only_writes_non_default_kind(tmp_path: Path) -> None:
     config.save()
 
     data = _read(tmp_path / "config.toml")
-    assert data["apps"] == [
+    assert data["app"] == [
         {"name": "cm", "local_dir": str(tmp_path / "cm")},
         {
             "name": "bin",
@@ -97,11 +97,11 @@ def test_load_rejects_duplicate_names(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
         """\
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "/tmp/cm"
 
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "/tmp/cm2"
 """,
@@ -114,7 +114,7 @@ local_dir = "/tmp/cm2"
 
 def test_load_rejects_invalid_toml(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    config_file.write_text("apps = [", encoding="utf-8")
+    config_file.write_text("app = [", encoding="utf-8")
 
     with pytest.raises(ConfigError, match="invalid TOML"):
         Config.load(config_file)
@@ -177,7 +177,7 @@ def test_load_expands_environment_variables(
         """\
 apps_root = "$HOME/dev"
 
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "${HOME}/projects/cm"
 """,
@@ -198,7 +198,7 @@ def test_relative_paths_resolve_against_the_config_directory(
         """\
 apps_root = "dev"
 
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "projects/cm"
 """,
@@ -257,8 +257,8 @@ def test_save_stores_home_paths_with_tilde(
 
     data = _read(tmp_path / "config.toml")
     assert data["apps_root"] == "~/dev"
-    assert data["apps"][0]["local_dir"] == "~/dev/cm"
-    assert data["apps"][1]["local_dir"] == str(tmp_path / "bin")
+    assert data["app"][0]["local_dir"] == "~/dev/cm"
+    assert data["app"][1]["local_dir"] == str(tmp_path / "bin")
 
 
 def test_load_warns_about_unknown_keys(tmp_path: Path) -> None:
@@ -267,7 +267,7 @@ def test_load_warns_about_unknown_keys(tmp_path: Path) -> None:
         """\
 unknown = true
 
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "/tmp/cm"
 extra = "value"
@@ -290,17 +290,17 @@ def test_load_rejects_non_string_apps_root(tmp_path: Path) -> None:
         Config.load(config_file)
 
 
-def test_load_rejects_non_list_apps(tmp_path: Path) -> None:
+def test_load_rejects_non_list_app(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    config_file.write_text('apps = "nope"\n', encoding="utf-8")
+    config_file.write_text('app = "nope"\n', encoding="utf-8")
 
-    with pytest.raises(ConfigError, match="'apps' must be a list"):
+    with pytest.raises(ConfigError, match="'app' must be a list"):
         Config.load(config_file)
 
 
 def test_load_rejects_non_mapping_app(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    config_file.write_text('apps = ["nope"]\n', encoding="utf-8")
+    config_file.write_text('app = ["nope"]\n', encoding="utf-8")
 
     with pytest.raises(ConfigError, match="must be a mapping"):
         Config.load(config_file)
@@ -308,9 +308,7 @@ def test_load_rejects_non_mapping_app(tmp_path: Path) -> None:
 
 def test_load_rejects_missing_name(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    config_file.write_text(
-        '[[apps]]\nlocal_dir = "/tmp/cm"\n', encoding="utf-8"
-    )
+    config_file.write_text('[[app]]\nlocal_dir = "/tmp/cm"\n', encoding="utf-8")
 
     with pytest.raises(ConfigError, match="valid 'name'"):
         Config.load(config_file)
@@ -318,7 +316,7 @@ def test_load_rejects_missing_name(tmp_path: Path) -> None:
 
 def test_load_rejects_missing_local_dir(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
-    config_file.write_text('[[apps]]\nname = "cm"\n', encoding="utf-8")
+    config_file.write_text('[[app]]\nname = "cm"\n', encoding="utf-8")
 
     with pytest.raises(ConfigError, match="valid 'local_dir'"):
         Config.load(config_file)
@@ -327,7 +325,7 @@ def test_load_rejects_missing_local_dir(tmp_path: Path) -> None:
 def test_load_rejects_invalid_remote(tmp_path: Path) -> None:
     config_file = tmp_path / "config.toml"
     config_file.write_text(
-        '[[apps]]\nname = "cm"\nlocal_dir = "/tmp/cm"\nremote = 3\n',
+        '[[app]]\nname = "cm"\nlocal_dir = "/tmp/cm"\nremote = 3\n',
         encoding="utf-8",
     )
 
@@ -338,38 +336,6 @@ def test_load_rejects_invalid_remote(tmp_path: Path) -> None:
 def test_load_rejects_a_directory_config_path(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="is a directory"):
         Config.load(tmp_path)
-
-
-def test_load_migrates_legacy_yaml(tmp_path: Path) -> None:
-    legacy = tmp_path / "config.yaml"
-    legacy.write_text(
-        """\
-apps_root: ~/dev
-apps:
-  - name: cm
-    local_dir: /tmp/cm
-    remote: git@example.com:cm.git
-""",
-        encoding="utf-8",
-    )
-    config_file = tmp_path / "config.toml"
-
-    config = Config.load(config_file)
-
-    assert config.migrated_from == legacy
-    assert config.created is False
-    assert config_file.is_file()
-    assert legacy.is_file()
-    assert config.apps[0].name == "cm"
-    assert _read(config_file)["apps"][0]["name"] == "cm"
-
-
-def test_load_rejects_invalid_legacy_yaml(tmp_path: Path) -> None:
-    legacy = tmp_path / "config.yaml"
-    legacy.write_text("apps: [", encoding="utf-8")
-
-    with pytest.raises(ConfigError, match="invalid YAML"):
-        Config.load(tmp_path / "config.toml")
 
 
 def test_save_escapes_toml_strings(tmp_path: Path) -> None:

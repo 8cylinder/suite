@@ -10,13 +10,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import platformdirs
-import yaml
 
 from .errors import SuiteError
 from .models import App, AppKind
 
 CONFIG_FILENAME = "config.toml"
-LEGACY_FILENAME = "config.yaml"
 DEFAULT_APPS_ROOT = Path("~/dev")
 
 CONFIG_HEADER = """\
@@ -24,7 +22,7 @@ CONFIG_HEADER = """\
 # Edit local_dir values to point at each application's checkout.
 """
 
-_TOP_LEVEL_KEYS = frozenset({"apps_root", "apps"})
+_TOP_LEVEL_KEYS = frozenset({"apps_root", "app"})
 _APP_KEYS = frozenset({"name", "local_dir", "remote", "description", "kind"})
 
 
@@ -40,7 +38,6 @@ class Config:
     apps_root: Path
     apps: list[App] = field(default_factory=list)
     created: bool = False
-    migrated_from: Path | None = None
     warnings: list[str] = field(default_factory=list)
 
     @classmethod
@@ -50,13 +47,6 @@ class Config:
         if config_file.is_dir():
             raise ConfigError(f"config path is a directory: {config_file}")
         if not config_file.exists():
-            legacy = config_file.with_name(LEGACY_FILENAME)
-            if legacy.is_file():
-                config = cls._from_yaml(legacy)
-                config.path = config_file
-                config.migrated_from = legacy
-                config.save()
-                return config
             config = cls(
                 path=config_file,
                 apps_root=DEFAULT_APPS_ROOT.expanduser(),
@@ -75,22 +65,6 @@ class Config:
         return cls._from_mapping(config_file, data)
 
     @classmethod
-    def _from_yaml(cls, path: Path) -> Config:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            raise ConfigError(f"could not read {path}: {exc}") from exc
-        try:
-            data = yaml.safe_load(text)
-        except yaml.YAMLError as exc:
-            raise ConfigError(f"invalid YAML in {path}: {exc}") from exc
-        if data is None:
-            raise ConfigError(f"config file is empty: {path}")
-        if not isinstance(data, Mapping):
-            raise ConfigError(f"config file must contain a mapping: {path}")
-        return cls._from_mapping(path, cast(Mapping[str, Any], data))
-
-    @classmethod
     def _from_mapping(cls, path: Path, data: Mapping[str, Any]) -> Config:
         warnings = [
             f"unknown configuration key {key!r} in {path}; ignoring"
@@ -104,15 +78,15 @@ class Config:
                 f"'apps_root' must be a non-empty string in {path}"
             )
 
-        apps_raw = data.get("apps", [])
-        if apps_raw is None:
-            apps_raw = []
-        if not isinstance(apps_raw, list):
-            raise ConfigError(f"'apps' must be a list in {path}")
+        app_entries = data.get("app", [])
+        if app_entries is None:
+            app_entries = []
+        if not isinstance(app_entries, list):
+            raise ConfigError(f"'app' must be a list in {path}")
 
         apps: list[App] = []
         seen: set[str] = set()
-        for index, item in enumerate(apps_raw, start=1):
+        for index, item in enumerate(app_entries, start=1):
             if not isinstance(item, Mapping):
                 raise ConfigError(f"app #{index} must be a mapping in {path}")
             entry = cast(Mapping[str, Any], item)
@@ -234,7 +208,7 @@ def _render(config: Config) -> str:
     lines.append(f"apps_root = {_toml_string(stored_path(config.apps_root))}")
     for app in config.apps:
         lines.append("")
-        lines.append("[[apps]]")
+        lines.append("[[app]]")
         lines.append(f"name = {_toml_string(app.name)}")
         lines.append(f"local_dir = {_toml_string(stored_path(app.local_dir))}")
         if app.remote:

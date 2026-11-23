@@ -245,13 +245,6 @@ def _load_config(ctx: click.Context) -> Config:
         err.print(
             f"[dim]Created config:[/dim] {escape(display_path(config.path))}"
         )
-    if config.migrated_from is not None:
-        err.print(
-            "[yellow]warning:[/yellow] migrated "
-            f"{escape(display_path(config.migrated_from))} to "
-            f"{escape(display_path(config.path))}",
-            soft_wrap=True,
-        )
     for warning in config.warnings:
         err.print(
             f"[yellow]warning:[/yellow] {escape(warning)}",

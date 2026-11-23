@@ -204,26 +204,25 @@ suite --config
 | Windows | `%LOCALAPPDATA%\suite\config.toml` |
 
 The first command that needs the database creates an empty config file with
-mode `0600`. A missing file is not an error. An existing `config.yaml` from an
-older release is migrated automatically the first time `suite` runs; the old
-file is left in place.
+mode `0600`. A missing file is not an error. Older YAML configurations are not
+converted automatically; convert each `apps:` entry into an `[[app]]` block.
 
 ```toml
 # ~/.config/suite/config.toml
 apps_root = "~/dev"
 
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "~/dev/cm"
 remote = "git@github.com:8cylinder/commit.git"
 description = "Generate a git commit message from the working-tree diff."
 
-[[apps]]
+[[app]]
 name = "tether"
 local_dir = "~/dev/tether"
 remote = "git@github.com:8cylinder/tether.git"
 
-[[apps]]
+[[app]]
 name = "bin"
 local_dir = "~/bin"
 kind = "misc"

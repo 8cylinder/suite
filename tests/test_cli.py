@@ -161,7 +161,7 @@ def test_add_remove(
     )
 
     data = _read_config(config_file)
-    assert data["apps"] == [
+    assert data["app"] == [
         {
             "name": "cm",
             "local_dir": str(local_dir),
@@ -214,7 +214,7 @@ def test_add_stores_home_paths_with_tilde(
     )
 
     data = _read_config(config_file)
-    stored = {app["name"]: app["local_dir"] for app in data["apps"]}
+    stored = {app["name"]: app["local_dir"] for app in data["app"]}
     assert stored["home-app"] == "~/dev/cm"
     assert stored["outside-app"] == str(outside)
     assert "Added home-app -> ~/dev/cm" in capsys.readouterr().out
@@ -232,12 +232,12 @@ def test_check_expands_home_paths_to_absolute(
     monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
     config_file.write_text(
         """\
-[[apps]]
+[[app]]
 name = "cm"
 local_dir = "~/dev/cm"
 remote = "git@example.com:cm.git"
 
-[[apps]]
+[[app]]
 name = "other"
 local_dir = "$HOME/dev/other"
 remote = "git@example.com:other.git"
@@ -279,7 +279,7 @@ def test_add_misc_writes_kind(
     )
 
     data = _read_config(config_file)
-    assert data["apps"] == [
+    assert data["app"] == [
         {
             "name": "bin",
             "local_dir": str(local_dir),
@@ -335,7 +335,7 @@ def test_add_existing_app_can_be_overwritten(
 
     assert prompts == [("App 'cm' already exists. Overwrite?", False)]
     data = _read_config(config_file)
-    assert data["apps"] == [
+    assert data["app"] == [
         {
             "name": "cm",
             "local_dir": str(tmp_path / "other"),
@@ -399,7 +399,7 @@ def test_add_requires_an_existing_directory(
     assert main(["add", "cm", str(tmp_path / "missing")]) == 2
     assert "not an existing directory" in capsys.readouterr().err
 
-    assert _read_config(config_file).get("apps", []) == []
+    assert _read_config(config_file).get("app", []) == []
 
 
 def test_add_detects_the_checkout_remote(
@@ -427,7 +427,7 @@ def test_add_detects_the_checkout_remote(
     assert main(["add", "cm", str(local_dir)]) == 0
 
     data = _read_config(config_file)
-    assert data["apps"][0]["remote"] == "git@example.com:cm.git"
+    assert data["app"][0]["remote"] == "git@example.com:cm.git"
 
 
 def test_add_without_a_remote_is_an_error(
@@ -439,7 +439,7 @@ def test_add_without_a_remote_is_an_error(
     assert main(["add", "cm", str(local_dir)]) == 2
 
     assert "no git remote" in capsys.readouterr().err
-    assert _read_config(config_file).get("apps", []) == []
+    assert _read_config(config_file).get("app", []) == []
 
 
 def test_add_rejects_a_file_path(
@@ -1433,7 +1433,7 @@ def test_invalid_toml_is_a_clean_error(
     config_file: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    config_file.write_text("apps = [", encoding="utf-8")
+    config_file.write_text("app = [", encoding="utf-8")
 
     assert main(["check"]) == 2
 
@@ -1452,20 +1452,6 @@ def test_unknown_config_keys_warn(
     assert main([]) == 0
 
     assert "unknown configuration key" in capsys.readouterr().err
-
-
-def test_legacy_yaml_is_migrated(
-    config_file: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    legacy = config_file.with_name("config.yaml")
-    legacy.write_text("apps: []\n", encoding="utf-8")
-
-    assert main([]) == 0
-
-    assert config_file.is_file()
-    assert legacy.is_file()
-    assert "migrated" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
