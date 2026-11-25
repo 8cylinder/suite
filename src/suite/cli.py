@@ -27,7 +27,7 @@ from .config import (
     stored_path,
 )
 from .errors import SuiteError
-from .git import check_app, get_remote_url
+from .git import check_app, clone_app, get_remote_url
 from .models import App, CheckResult
 from .prompt_projects import add_projects, load_projects
 
@@ -191,6 +191,14 @@ def add(
     ctx.exit(
         _cmd_add(ctx, _load_config(ctx), name, path, remote, description, misc)
     )
+
+
+@cli.command(help="install a configured application")
+@click.argument("app", help="configured application name")
+@click.pass_context
+def install(ctx: click.Context, app: str) -> None:
+    """Clone a configured application into its local directory."""
+    ctx.exit(_cmd_install(ctx, _load_config(ctx), app))
 
 
 @cli.command(help="remove an application")
@@ -652,6 +660,32 @@ def _cmd_add(
     action = "Updated" if existing is not None else "Added"
     out.print(
         f"{action} {escape(app.name)} -> {escape(stored_path(app.local_dir))}"
+    )
+    return 0
+
+
+def _cmd_install(ctx: click.Context, config: Config, name: str) -> int:
+    out, err = _consoles_for(ctx)
+    name = name.strip()
+    if not name:
+        raise SuiteError("application name cannot be empty")
+
+    app = config.find(name)
+    if app is None:
+        raise SuiteError(f"app {name!r} is not configured")
+    if app.local_dir.exists():
+        err.print(
+            f"[yellow]warning:[/yellow] app {escape(app.name)} already exists "
+            f"at {escape(display_path(app.local_dir))}; skipping install",
+            soft_wrap=True,
+        )
+        return 0
+    if app.remote is None:
+        raise SuiteError(f"no git remote configured for {name!r}")
+
+    clone_app(app.remote, app.local_dir)
+    out.print(
+        f"Installed {escape(app.name)} -> {escape(display_path(app.local_dir))}"
     )
     return 0
 

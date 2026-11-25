@@ -3,8 +3,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from .errors import SuiteError
 from .models import App, CheckResult
 
+CLONE_TIMEOUT = 300
 FETCH_TIMEOUT = 60
 GIT_TIMEOUT = 30
 
@@ -119,6 +121,33 @@ def get_remote_url(path: Path) -> str | None:
     if remote.returncode != 0:
         return None
     return remote.stdout.strip() or None
+
+
+def clone_app(remote: str, target: Path) -> None:
+    """Clone ``remote`` into ``target``, creating its parent directories."""
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise SuiteError(f"could not create {target.parent}: {exc}") from exc
+
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--", remote, str(target)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=CLONE_TIMEOUT,
+        )
+    except FileNotFoundError as exc:
+        raise SuiteError("git is not installed or not on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SuiteError("git clone timed out") from exc
+    except OSError as exc:
+        raise SuiteError(f"could not run git clone: {exc}") from exc
+
+    if result.returncode != 0:
+        message = _first_line(result.stderr) or "unknown error"
+        raise SuiteError(f"git clone failed: {message}")
 
 
 def _git(

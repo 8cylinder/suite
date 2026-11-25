@@ -61,6 +61,7 @@ suite check cm tether
 | `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Check applications for uncommitted changes, commits to pull, installed completions, and prompt-project registration. |
 | `suite` | Check every application; same as `suite check`. |
 | `suite add NAME PATH [-r/--remote URL] [--description TEXT] [--misc]` | Add an application whose checkout already exists at `PATH`. |
+| `suite install APP` | Clone a configured application into its local directory. |
 | `suite remove NAME` | Remove an application from the database. |
 | `suite -h`, `suite --help` | Show help for `suite` or a subcommand. |
 
@@ -177,6 +178,26 @@ apps and docs rather than a single application. Misc entries are stored with
 If `NAME` is already configured, `add` asks before overwriting the existing
 record. Confirming replaces the stored local directory, remote, description,
 and misc flag; declining leaves the record unchanged.
+
+### `install`
+
+```text
+suite install APP
+```
+
+`APP` must be an application name in the configuration. `install` creates the
+application's `local_dir` and clones its configured `remote` into it. This is
+how you populate a configuration on a new machine, or restore a checkout that
+is missing.
+
+If the application is not configured, `install` exits with an error. If the
+application's `local_dir` already exists, or it has no `remote`, `install`
+prints a warning or error and exits without cloning.
+
+```console
+$ suite install cm
+Installed cm -> /home/user/dev/cm
+```
 
 ### `remove`
 

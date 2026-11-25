@@ -452,6 +452,149 @@ def test_add_rejects_a_file_path(
     assert "not an existing directory" in capsys.readouterr().err
 
 
+def _make_repo(path: Path) -> None:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    (path / "README.md").write_text("demo\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "README.md"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(path),
+            "-c",
+            "user.name=Suite Test",
+            "-c",
+            "user.email=suite@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "initial",
+        ],
+        check=True,
+    )
+
+
+def test_install_clones_a_configured_app(
+    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    apps_root = tmp_path / "apps"
+    target = apps_root / "cm"
+    origin = tmp_path / "repos" / "cm"
+    _make_repo(origin)
+    config_file.write_text(
+        f"""\
+apps_root = "{apps_root}"
+
+[[app]]
+name = "cm"
+local_dir = "{target}"
+remote = "{origin}"
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["install", "cm"]) == 0
+
+    assert (target / "README.md").is_file()
+    assert (target / ".git").is_dir()
+    data = _read_config(config_file)
+    assert data["app"] == [
+        {
+            "name": "cm",
+            "local_dir": str(target),
+            "remote": str(origin),
+        }
+    ]
+    assert "Installed cm ->" in capsys.readouterr().out
+
+
+def test_install_rejects_an_unknown_app(
+    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_file.write_text(
+        f'apps_root = "{tmp_path / "apps"}"\n', encoding="utf-8"
+    )
+
+    assert main(["install", "cm"]) == 2
+
+    assert "app 'cm' is not configured" in capsys.readouterr().err
+
+
+def test_install_warns_when_the_path_already_exists(
+    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "apps" / "cm"
+    target.mkdir(parents=True)
+    config_file.write_text(
+        f"""\
+apps_root = "{tmp_path / "apps"}"
+
+[[app]]
+name = "cm"
+local_dir = "{target}"
+remote = "git@example.com:cm.git"
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["install", "cm"]) == 0
+
+    captured = capsys.readouterr()
+    assert "warning" in captured.err
+    assert "cm already exists" in captured.err
+    assert "Installed" not in captured.out
+
+
+def test_install_rejects_an_empty_app(
+    config_file: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["install", "  "]) == 2
+
+    assert "cannot be empty" in capsys.readouterr().err
+
+
+def test_install_requires_a_configured_remote(
+    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_file.write_text(
+        f"""\
+apps_root = "{tmp_path / "apps"}"
+
+[[app]]
+name = "cm"
+local_dir = "{tmp_path / "apps" / "cm"}"
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["install", "cm"]) == 2
+
+    assert "no git remote" in capsys.readouterr().err
+
+
+def test_install_reports_a_clone_failure(
+    config_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    target = tmp_path / "apps" / "cm"
+    config_file.write_text(
+        f"""\
+apps_root = "{tmp_path / "apps"}"
+
+[[app]]
+name = "cm"
+local_dir = "{target}"
+remote = "{tmp_path / "missing"}"
+""",
+        encoding="utf-8",
+    )
+
+    assert main(["install", "cm"]) == 2
+
+    assert "git clone failed" in capsys.readouterr().err
+    assert not target.exists()
+
+
 def test_check_reports_missing_app(
     config_file: Path,
     tty_output: None,
@@ -1521,7 +1664,7 @@ def test_config_does_not_create_the_directory(
     )
 
 
-@pytest.mark.parametrize("command", ["add", "check", "remove"])
+@pytest.mark.parametrize("command", ["add", "check", "install", "remove"])
 def test_every_subcommand_has_short_help(
     command: str,
     config_file: Path,
@@ -1574,6 +1717,7 @@ def test_unknown_config_keys_warn(
         ["--help"],
         ["check", "--help"],
         ["add", "--help"],
+        ["install", "--help"],
         ["remove", "--help"],
     ],
 )
