@@ -137,18 +137,27 @@ when the checkout is detached, and the reason an application is missing, is
 not a git repository, or could not be inspected. When every row is blank the
 column is omitted entirely.
 
+Misc entries are grouped at the top of the list and separated from applications
+by the same rule used below the headers: the header rule is 50% grey and the
+group rule is 25% grey. Within each group, entries are sorted by name. Piped
+output uses the same ordering.
+
 The table is colorized with [Rich](https://github.com/Textualize/rich): green
 for clean or up-to-date values, yellow for changes or commits to pull/push,
 red for unregistered projects, missing completions, and application problems,
-and dim for neutral details. The rule below the headers is 50% grey. Colors are
-disabled automatically when output is not a terminal, along with the header.
+and dim for neutral details. Application names are bold bright white, and turn
+red when the app has a problem. The rule below the headers is 50% grey. Colors
+are disabled automatically when output is not a terminal, along with the
+header.
 
 ```text
 App     Local dir              PRJ  CMP  To commit    To push      To pull      Detail
+──────────────────────────────────────────────────────────────────────────────────────
+bin     /home/user/bin         x    -    clean        up to date   up to date
+──────────────────────────────────────────────────────────────────────────────────────
 cm      /home/user/dev/cm      x    ✓    2 changes    1 commit     3 commits
 tether  /home/user/dev/tether  ✓    x    clean        up to date   up to date
 prism   /home/user/dev/prism   ✓    x    -            -            -            missing: /home/user/dev/prism
-bin     /home/user/bin         x    -    clean        up to date   up to date
 ```
 
 ### `add`

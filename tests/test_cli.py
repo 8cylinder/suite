@@ -784,6 +784,116 @@ def test_check_separates_header_from_rows(
     assert "one" in lines[header + 2]
 
 
+def test_check_groups_misc_apps_first_with_separator(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("two", "bin", "one", "extra"):
+        (tmp_path / name).mkdir()
+        args = [
+            "add",
+            name,
+            str(tmp_path / name),
+            "--remote",
+            f"git@example.com:{name}.git",
+        ]
+        if name in ("bin", "extra"):
+            args.append("--misc")
+        assert main(args) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+
+    def row_index(name: str) -> int:
+        return next(
+            index for index, line in enumerate(lines) if line.startswith(name)
+        )
+
+    assert row_index("bin") < row_index("extra")
+    assert row_index("extra") < row_index("one") < row_index("two")
+    separator = lines[row_index("extra") + 1].strip()
+    assert separator
+    assert set(separator) == {"─"}
+
+
+def test_check_piped_output_groups_misc_apps_first(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("two", "bin", "one"):
+        (tmp_path / name).mkdir()
+        args = [
+            "add",
+            name,
+            str(tmp_path / name),
+            "--remote",
+            f"git@example.com:{name}.git",
+        ]
+        if name == "bin":
+            args.append("--misc")
+        assert main(args) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["check", "--no-fetch"]) == 0
+
+    names = [
+        line.split("\t")[0] for line in capsys.readouterr().out.splitlines()
+    ]
+    assert names == ["bin", "one", "two"]
+
+
+def test_check_section_rule_has_a_distinct_color(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("bin", "one"):
+        (tmp_path / name).mkdir()
+        args = [
+            "add",
+            name,
+            str(tmp_path / name),
+            "--remote",
+            f"git@example.com:{name}.git",
+        ]
+        if name == "bin":
+            args.append("--misc")
+        assert main(args) == 0
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app)
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    capsys.readouterr()
+
+    assert main(["--color", "always", "check", "--no-fetch"]) == 0
+
+    rules = [
+        line for line in capsys.readouterr().out.splitlines() if "─" in line
+    ]
+    assert len(rules) == 2
+    assert rules[0] != rules[1]
+
+
 def test_check_shows_completion_status(
     config_file: Path,
     tty_output: None,
@@ -907,11 +1017,13 @@ def test_check_colors_the_status_columns(
     assert main(["--color", "always", "check", "--no-fetch"]) == 0
 
     output = capsys.readouterr().out
+    assert "\x1b[1mApp" in output
+    assert "\x1b[1;97mone" in output
     assert "\x1b[32m✓" in output
     assert "\x1b[33m1 change" in output
     assert "\x1b[33m2 commits" in output
     separator = next(line for line in output.splitlines() if "─" in line)
-    assert "\x1b[90m" in separator
+    assert "\x1b[" in separator
 
 
 def test_check_reports_commits_to_push(

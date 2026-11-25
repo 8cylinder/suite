@@ -11,9 +11,10 @@ from typing import Any
 
 import click
 from rich import box
-from rich.console import Console
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.markup import escape
 from rich.measure import Measurement
+from rich.segment import Segment
 from rich.table import Table
 from rich.text import Text
 
@@ -40,6 +41,16 @@ CHECK_HEADERS = (
     "To pull",
     "Detail",
 )
+
+# A section break uses the box's "row" characters, while the header rule uses
+# its "head_row" characters. The private-use marker is replaced with a rule by
+# _CheckTable so the section rule can use its own color.
+SECTION_MARKER = "\ue000"
+CHECK_BOX = box.Box(
+    f"    \n    \n ── \n    \n {SECTION_MARKER * 2} \n    \n    \n    \n"
+)
+CHECK_HEADER_STYLE = "#808080"  # 50% brightness
+CHECK_SECTION_STYLE = "#404040"  # 25% brightness
 
 
 @dataclass
@@ -414,15 +425,43 @@ def _visible_rows(
     return CHECK_HEADERS[:-1], [row[:-1] for row in rows]
 
 
+class _CheckTable:
+    """Render the check table with a separately colored section rule."""
+
+    def __init__(self, table: Table, section_style: str) -> None:
+        self.table = table
+        self.section_style = section_style
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions
+    ) -> RenderResult:
+        width = self.table.width or options.max_width
+        lines = console.render_lines(
+            self.table, options.update_width(width), pad=False
+        )
+        for line in lines:
+            for segment in line:
+                if SECTION_MARKER in segment.text:
+                    style = console.get_style(self.section_style)
+                    if segment.style is not None:
+                        style = segment.style + style
+                    yield Segment(
+                        segment.text.replace(SECTION_MARKER, "─"), style
+                    )
+                else:
+                    yield segment
+            yield Segment.line()
+
+
 def _check_table(
     entries: Sequence[tuple[CheckResult, bool, bool | None]],
     rows: Sequence[Sequence[str]],
     headers: Sequence[str],
     console: Console,
-) -> Table:
+) -> _CheckTable:
     table = Table(
-        box=box.SIMPLE_HEAD,
-        border_style="bright_black",
+        box=CHECK_BOX,
+        border_style=CHECK_HEADER_STYLE,
         pad_edge=False,
         show_header=True,
         show_edge=False,
@@ -431,8 +470,8 @@ def _check_table(
     )
     for header in headers:
         table.add_column(header, no_wrap=header == "Detail")
-    for (result, listed, has_completion), row in zip(
-        entries, rows, strict=True
+    for index, ((result, listed, has_completion), row) in enumerate(
+        zip(entries, rows, strict=True)
     ):
         styles = _check_styles(result, listed, has_completion)[: len(headers)]
         table.add_row(
@@ -441,11 +480,17 @@ def _check_table(
                 for cell, style in zip(row, styles, strict=True)
             )
         )
+        if (
+            result.app.kind == "misc"
+            and index + 1 < len(entries)
+            and entries[index + 1][0].app.kind != "misc"
+        ):
+            table.add_section()
     # Size the table from its contents and let long detail values overflow
     # the terminal instead of wrapping, matching how rows used to print.
     options = console.options.update_width(10_000)
     table.width = Measurement.get(console, options, table).maximum
-    return table
+    return _CheckTable(table, CHECK_SECTION_STYLE)
 
 
 def _check_row(
@@ -547,7 +592,7 @@ def _check_styles(
         push = "green" if result.ahead == 0 else "yellow"
         pull = "green" if result.behind == 0 else "yellow"
     return (
-        "bold",
+        "bold bright_white",
         "dim",
         project,
         completion,
@@ -558,8 +603,9 @@ def _check_styles(
     )
 
 
-def _app_sort_key(app: App) -> str:
-    return app.name.casefold()
+def _app_sort_key(app: App) -> tuple[int, str]:
+    """Sort misc collections first, then applications, each by name."""
+    return (0 if app.kind == "misc" else 1, app.name.casefold())
 
 
 def _cmd_add(
