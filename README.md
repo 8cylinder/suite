@@ -60,6 +60,7 @@ suite check cm tether
 | --- | --- |
 | `suite check [APP ...] [--no-fetch] [--update-dot-project]` | Check applications for uncommitted changes, commits to pull, installed completions, and prompt-project registration. |
 | `suite` | Check every application; same as `suite check`. |
+| `suite update` | Pull remote commits for clean applications, asking before each pull and offering `make install`. |
 | `suite add NAME PATH [-r/--remote URL] [--description TEXT] [--misc]` | Add an application whose checkout already exists at `PATH`. |
 | `suite install APP` | Clone a configured application into its local directory. |
 | `suite remove NAME` | Remove an application from the database. |
@@ -160,6 +161,33 @@ cm      /home/user/dev/cm      x    ✓    2 changes    1 commit     3 commits
 tether  /home/user/dev/tether  ✓    x    clean        up to date   up to date
 prism   /home/user/dev/prism   ✓    x    -            -            -            missing: /home/user/dev/prism
 ```
+
+### `update`
+
+```text
+suite update
+```
+
+`update` fetches every application, then considers only applications that are
+clean and have commits behind their upstream. Applications with uncommitted
+changes, commits to push, no upstream branch, a detached HEAD, or a failed
+fetch are skipped.
+
+For each application with remote updates, `update` asks `Pull APP? [Y/n]`.
+Confirming fast-forwards the checkout with `git pull --ff-only`. After a
+successful pull, if the application has a `make install` target, it asks
+`Run "make install"? [Y/n]` before running it.
+
+```console
+$ suite update
+Pull cm? [Y/n]: y
+Pulled cm
+Run "make install"? [Y/n]: y
+Installed cm
+```
+
+Pull and `make install` failures are reported and the command continues with
+the remaining applications. It exits `1` when anything failed.
 
 ### `add`
 

@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from suite.git import check_app, get_remote_url
+from suite import git as git_module
+from suite.errors import SuiteError
+from suite.git import check_app, get_remote_url, pull_app
 from suite.models import App
 
 
@@ -145,3 +147,63 @@ def test_repository_without_upstream(tmp_path: Path) -> None:
     assert result.state == "ok"
     assert result.upstream is None
     assert result.branch == "main"
+
+
+def test_pull_app_fast_forwards(
+    repositories: tuple[Path, Path], tmp_path: Path
+) -> None:
+    origin, clone = repositories
+    other = tmp_path / "other"
+    git(tmp_path, "clone", str(origin), str(other))
+    commit_file(other, "remote change\n", "remote change")
+    git(other, "push", "origin", "main")
+
+    pull_app(App(name="demo", local_dir=clone))
+
+    assert (clone / "file.txt").read_text(encoding="utf-8") == "remote change\n"
+
+
+def test_pull_app_requires_an_upstream(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-b", "main")
+    commit_file(repo, "one\n", "initial")
+
+    with pytest.raises(SuiteError, match="git pull failed"):
+        pull_app(App(name="demo", local_dir=repo))
+
+
+def test_pull_app_reports_a_missing_git(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def missing(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(git_module.subprocess, "run", missing)
+
+    with pytest.raises(SuiteError, match="git is not installed"):
+        pull_app(App(name="demo", local_dir=tmp_path))
+
+
+def test_pull_app_reports_a_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def timed_out(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.TimeoutExpired("git", 1)
+
+    monkeypatch.setattr(git_module.subprocess, "run", timed_out)
+
+    with pytest.raises(SuiteError, match="git pull timed out"):
+        pull_app(App(name="demo", local_dir=tmp_path))
+
+
+def test_pull_app_reports_an_os_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise OSError("boom")
+
+    monkeypatch.setattr(git_module.subprocess, "run", fail)
+
+    with pytest.raises(SuiteError, match="could not run git pull"):
+        pull_app(App(name="demo", local_dir=tmp_path))

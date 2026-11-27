@@ -9,6 +9,7 @@ from .models import App, CheckResult
 CLONE_TIMEOUT = 300
 FETCH_TIMEOUT = 60
 GIT_TIMEOUT = 30
+PULL_TIMEOUT = 300
 
 
 def check_app(app: App, *, fetch: bool = True) -> CheckResult:
@@ -148,6 +149,29 @@ def clone_app(remote: str, target: Path) -> None:
     if result.returncode != 0:
         message = _first_line(result.stderr) or "unknown error"
         raise SuiteError(f"git clone failed: {message}")
+
+
+def pull_app(app: App) -> None:
+    """Fast-forward ``app``'s checkout to its upstream branch."""
+    try:
+        result = _git(
+            app.local_dir,
+            "pull",
+            "--ff-only",
+            "--no-rebase",
+            "--quiet",
+            timeout=PULL_TIMEOUT,
+        )
+    except FileNotFoundError as exc:
+        raise SuiteError("git is not installed or not on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SuiteError("git pull timed out") from exc
+    except OSError as exc:
+        raise SuiteError(f"could not run git pull: {exc}") from exc
+
+    if result.returncode != 0:
+        message = _first_line(result.stderr) or "unknown error"
+        raise SuiteError(f"git pull failed: {message}")
 
 
 def _git(

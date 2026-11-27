@@ -8,7 +8,8 @@
 
 `suite` keeps a local TOML database of your applications and checks each
 application for uncommitted changes, commits waiting to be pulled, and
-installed bash completions.
+installed bash completions. `suite update` fast-forwards clean applications
+with remote updates, optionally running `make install`.
 
 Running `suite` without a command is the same as `suite check`.
 

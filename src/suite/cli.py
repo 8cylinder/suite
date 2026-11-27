@@ -27,7 +27,8 @@ from .config import (
     stored_path,
 )
 from .errors import SuiteError
-from .git import check_app, clone_app, get_remote_url
+from .git import check_app, clone_app, get_remote_url, pull_app
+from .make import has_install, run_install
 from .models import App, CheckResult
 from .prompt_projects import add_projects, load_projects
 
@@ -162,6 +163,13 @@ def check(
             update_dot_project=update_dot_project,
         )
     )
+
+
+@cli.command(help="pull remote updates for clean applications")
+@click.pass_context
+def update(ctx: click.Context) -> None:
+    """Pull remote commits and optionally run make install."""
+    ctx.exit(_cmd_update(ctx, _load_config(ctx)))
 
 
 @cli.command(help="add an application")
@@ -414,6 +422,92 @@ def _cmd_check(
             )
 
     return 1 if any(result.has_problem for result in results) else 0
+
+
+def _cmd_update(ctx: click.Context, config: Config) -> int:
+    apps = sorted(config.apps, key=_app_sort_key)
+    out, err = _consoles_for(ctx)
+    tty = _stdout_is_tty()
+    if not apps:
+        message = "No apps configured. Add one with `suite add NAME PATH`."
+        if tty:
+            out.print(message)
+        else:
+            err.print(message)
+        return 0
+
+    if tty:
+        with out.status("Checking apps…", spinner="dots"):
+            results = _check_all(apps, fetch=True)
+    else:
+        results = _check_all(apps, fetch=True)
+    results.sort(key=lambda result: _app_sort_key(result.app))
+
+    for result in results:
+        if result.fetch_error:
+            err.print(
+                "[yellow]warning:[/yellow] "
+                f"{escape(result.app.name)}: "
+                f"{escape(result.fetch_error)}",
+                soft_wrap=True,
+            )
+
+    candidates = [result for result in results if _can_update(result)]
+    if not candidates:
+        message = "No apps with remote updates to pull."
+        if tty:
+            out.print(message)
+        else:
+            err.print(message)
+        return 0
+
+    failures = 0
+    for result in candidates:
+        app = result.app
+        if not click.confirm(f"Pull {app.name}?", default=True):
+            continue
+
+        try:
+            pull_app(app)
+        except SuiteError as exc:
+            err.print(
+                f"[red]error:[/red] {escape(app.name)}: {escape(str(exc))}",
+                soft_wrap=True,
+            )
+            failures += 1
+            continue
+        out.print(f"Pulled {escape(app.name)}")
+
+        if not has_install(app.local_dir):
+            continue
+        if not click.confirm('Run "make install"?', default=True):
+            continue
+
+        try:
+            run_install(app.local_dir)
+        except SuiteError as exc:
+            err.print(
+                f"[red]error:[/red] {escape(app.name)}: {escape(str(exc))}",
+                soft_wrap=True,
+            )
+            failures += 1
+            continue
+        out.print(f"Installed {escape(app.name)}")
+
+    return 1 if failures else 0
+
+
+def _can_update(result: CheckResult) -> bool:
+    """Report whether an application can safely fast-forward."""
+    return (
+        result.state == "ok"
+        and result.fetch_error is None
+        and result.upstream is not None
+        and result.branch is not None
+        and result.changes == 0
+        and result.ahead == 0
+        and result.behind > 0
+    )
 
 
 def _check_all(apps: Sequence[App], *, fetch: bool) -> list[CheckResult]:

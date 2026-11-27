@@ -13,6 +13,7 @@ import pytest
 
 from suite import cli
 from suite.cli import main
+from suite.errors import SuiteError
 from suite.models import App, CheckResult
 
 
@@ -1372,6 +1373,289 @@ def test_check_update_dot_project_adds_missing_projects(
     assert lines[1].startswith(f"two\t{tmp_path / 'two'}\t#")
 
 
+def _fake_update_check(app: App, *, fetch: bool = True) -> CheckResult:
+    return CheckResult(
+        app=app,
+        behind=1,
+        upstream="origin/main",
+        branch="main",
+    )
+
+
+def _add_apps(config_file: Path, tmp_path: Path, *names: str) -> None:
+    for name in names:
+        (tmp_path / name).mkdir()
+        assert (
+            main(
+                [
+                    "add",
+                    name,
+                    str(tmp_path / name),
+                    "--remote",
+                    f"git@example.com:{name}.git",
+                ]
+            )
+            == 0
+        )
+
+
+def test_update_pulls_clean_apps_with_remote_updates(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _add_apps(config_file, tmp_path, "two", "one", "three", "four")
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        if app.name == "two":
+            return CheckResult(
+                app=app,
+                changes=1,
+                behind=1,
+                upstream="origin/main",
+                branch="main",
+            )
+        if app.name == "three":
+            return CheckResult(
+                app=app,
+                ahead=1,
+                behind=1,
+                upstream="origin/main",
+                branch="main",
+            )
+        if app.name == "four":
+            return CheckResult(app=app, upstream="origin/main", branch="main")
+        return _fake_update_check(app)
+
+    prompts: list[tuple[str, bool]] = []
+
+    def fake_confirm(message: str, *, default: bool = False) -> bool:
+        prompts.append((message, default))
+        return True
+
+    pulled: list[str] = []
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    monkeypatch.setattr(cli.click, "confirm", fake_confirm)
+    monkeypatch.setattr(cli, "pull_app", lambda app: pulled.append(app.name))
+    monkeypatch.setattr(cli, "has_install", lambda _path: False)
+    capsys.readouterr()
+
+    assert main(["update"]) == 0
+
+    assert prompts == [("Pull one?", True)]
+    assert pulled == ["one"]
+    assert "Pulled one" in capsys.readouterr().out
+
+
+def test_update_asks_before_make_install(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _add_apps(config_file, tmp_path, "one")
+    prompts: list[tuple[str, bool]] = []
+    answers = iter([True, True])
+
+    def fake_confirm(message: str, *, default: bool = False) -> bool:
+        prompts.append((message, default))
+        return next(answers)
+
+    installed: list[str] = []
+    monkeypatch.setattr(cli, "check_app", _fake_update_check)
+    monkeypatch.setattr(cli.click, "confirm", fake_confirm)
+    monkeypatch.setattr(cli, "pull_app", lambda _app: None)
+    monkeypatch.setattr(cli, "has_install", lambda _path: True)
+    monkeypatch.setattr(
+        cli, "run_install", lambda path: installed.append(path.name)
+    )
+    capsys.readouterr()
+
+    assert main(["update"]) == 0
+
+    assert prompts == [
+        ("Pull one?", True),
+        ('Run "make install"?', True),
+    ]
+    assert installed == ["one"]
+    output = capsys.readouterr().out
+    assert "Pulled one" in output
+    assert "Installed one" in output
+
+
+def test_update_skips_make_install_when_declined(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add_apps(config_file, tmp_path, "one")
+    answers = iter([True, False])
+    installed: list[str] = []
+
+    monkeypatch.setattr(cli, "check_app", _fake_update_check)
+    monkeypatch.setattr(
+        cli.click,
+        "confirm",
+        lambda message, *, default=False: next(answers),
+    )
+    monkeypatch.setattr(cli, "pull_app", lambda _app: None)
+    monkeypatch.setattr(cli, "has_install", lambda _path: True)
+    monkeypatch.setattr(
+        cli, "run_install", lambda path: installed.append(path.name)
+    )
+
+    assert main(["update"]) == 0
+    assert installed == []
+
+
+def test_update_skips_a_declined_pull(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add_apps(config_file, tmp_path, "one")
+    pulled: list[str] = []
+
+    monkeypatch.setattr(cli, "check_app", _fake_update_check)
+    monkeypatch.setattr(
+        cli.click, "confirm", lambda message, *, default=False: False
+    )
+    monkeypatch.setattr(cli, "pull_app", lambda app: pulled.append(app.name))
+
+    assert main(["update"]) == 0
+    assert pulled == []
+
+
+def test_update_continues_after_a_pull_failure(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _add_apps(config_file, tmp_path, "one", "two")
+    pulled: list[str] = []
+
+    def fake_pull(app: App) -> None:
+        if app.name == "one":
+            raise SuiteError("boom")
+        pulled.append(app.name)
+
+    monkeypatch.setattr(cli, "check_app", _fake_update_check)
+    monkeypatch.setattr(
+        cli.click, "confirm", lambda message, *, default=False: True
+    )
+    monkeypatch.setattr(cli, "pull_app", fake_pull)
+    monkeypatch.setattr(cli, "has_install", lambda _path: False)
+    capsys.readouterr()
+
+    assert main(["update"]) == 1
+
+    captured = capsys.readouterr()
+    assert "error: one: boom" in captured.err
+    assert pulled == ["two"]
+
+
+def test_update_reports_a_make_install_failure(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _add_apps(config_file, tmp_path, "one")
+
+    def fail(_path: Path) -> None:
+        raise SuiteError("boom")
+
+    monkeypatch.setattr(cli, "check_app", _fake_update_check)
+    monkeypatch.setattr(
+        cli.click, "confirm", lambda message, *, default=False: True
+    )
+    monkeypatch.setattr(cli, "pull_app", lambda _app: None)
+    monkeypatch.setattr(cli, "has_install", lambda _path: True)
+    monkeypatch.setattr(cli, "run_install", fail)
+    capsys.readouterr()
+
+    assert main(["update"]) == 1
+
+    captured = capsys.readouterr()
+    assert "error: one: boom" in captured.err
+    assert "Installed one" not in captured.out
+
+
+def test_update_skips_apps_with_fetch_errors(
+    config_file: Path,
+    tty_output: None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _add_apps(config_file, tmp_path, "one")
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(
+            app=app,
+            behind=1,
+            upstream="origin/main",
+            branch="main",
+            fetch_error="could not resolve host",
+        )
+
+    prompts: list[str] = []
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    monkeypatch.setattr(
+        cli.click,
+        "confirm",
+        lambda message, *, default=False: prompts.append(message) or True,
+    )
+    capsys.readouterr()
+
+    assert main(["update"]) == 0
+
+    captured = capsys.readouterr()
+    assert "warning: one: could not resolve host" in captured.err
+    assert "No apps with remote updates to pull." in captured.out
+    assert prompts == []
+
+
+def test_update_reports_no_apps_when_piped(
+    config_file: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _add_apps(config_file, tmp_path, "one")
+
+    def fake_check_app(app: App, *, fetch: bool = True) -> CheckResult:
+        return CheckResult(app=app, upstream="origin/main", branch="main")
+
+    monkeypatch.setattr(cli, "check_app", fake_check_app)
+    monkeypatch.setattr(cli, "_stdout_is_tty", lambda: False)
+    capsys.readouterr()
+
+    assert main(["update"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No apps with remote updates to pull." in captured.err
+
+
+def test_update_without_apps(
+    config_file: Path,
+    tty_output: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["update"]) == 0
+
+    assert "No apps configured." in capsys.readouterr().out
+
+
 def test_config_path(
     config_file: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1664,7 +1948,9 @@ def test_config_does_not_create_the_directory(
     )
 
 
-@pytest.mark.parametrize("command", ["add", "check", "install", "remove"])
+@pytest.mark.parametrize(
+    "command", ["add", "check", "install", "remove", "update"]
+)
 def test_every_subcommand_has_short_help(
     command: str,
     config_file: Path,
@@ -1719,6 +2005,7 @@ def test_unknown_config_keys_warn(
         ["add", "--help"],
         ["install", "--help"],
         ["remove", "--help"],
+        ["update", "--help"],
     ],
 )
 def test_long_help_flags(
